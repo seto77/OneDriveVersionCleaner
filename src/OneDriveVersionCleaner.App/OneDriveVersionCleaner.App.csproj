@@ -40,6 +40,12 @@
     <Compile Update="DeleteConfirmationForm.Designer.cs">
       <DependentUpon>DeleteConfirmationForm.cs</DependentUpon>
     </Compile>
+    <Compile Update="SharePointSignInForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="SharePointSignInForm.Designer.cs">
+      <DependentUpon>SharePointSignInForm.cs</DependentUpon>
+    </Compile>
   </ItemGroup>
 
   <!-- The WebView2 package references both desktop UI assemblies. This app is WinForms-only. -->

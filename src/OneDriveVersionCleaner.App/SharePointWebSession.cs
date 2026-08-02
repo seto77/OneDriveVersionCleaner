@@ -3,17 +3,18 @@ using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
 using OneDriveVersionCleaner.Core.Models;
 using OneDriveVersionCleaner.Core.Retry;
 
 namespace OneDriveVersionCleaner.App;
 
 /// <summary>
-/// Hosts the user's normal SharePoint sign-in and issues same-origin REST requests from that page.
+/// Issues same-origin SharePoint REST requests from the page the user signed in to.
 /// Authentication cookies never leave WebView2 and are never copied into application storage.
+/// The session owns the sign-in window and keeps it alive: the requests below run inside that
+/// page, so disposing it when the dialog closes would throw the signed-in session away.
 /// </summary>
-internal sealed class SharePointWebSession : Form
+internal sealed class SharePointWebSession : IDisposable
 {
     /// <summary>
     /// NFR-PERF-002: SharePoint Online throttles a single user aggressively, and a full
@@ -58,15 +59,7 @@ internal sealed class SharePointWebSession : Form
 
     private readonly Uri _siteUri;
     private readonly Uri _serviceEndpointUri;
-    private readonly WebView2 _webView = new();
-    private readonly Label _statusLabel = new();
-    private readonly Button _verifyButton = new();
-    private readonly Button _reloadButton = new();
-    private readonly Button _cancelButton = new();
-    private readonly System.Windows.Forms.Timer _navigationTimer = new()
-    {
-        Interval = 30_000,
-    };
+    private readonly SharePointSignInForm _signInForm;
     private readonly SemaphoreSlim _requestGate = new(MaximumConcurrentRequests, MaximumConcurrentRequests);
     private readonly ConcurrentDictionary<string, TaskCompletionSource<BrowserResponse>> _pending = new();
     private readonly RetryPolicyEvaluator _retryPolicy = new();
@@ -75,7 +68,6 @@ internal sealed class SharePointWebSession : Form
     private TimeSpan _throttleWaited;
     private bool _throttleBudgetExhausted;
     private int _throttleEvents;
-    private bool _initialized;
     private bool _verified;
     private string? _formDigest;
     private DateTimeOffset _formDigestExpiresAtUtc;
@@ -84,7 +76,8 @@ internal sealed class SharePointWebSession : Form
     {
         ArgumentNullException.ThrowIfNull(siteUri);
         ArgumentNullException.ThrowIfNull(serviceEndpointUri);
-        if (!IsHttps(siteUri) || !IsHttps(serviceEndpointUri) ||
+        if (!SharePointOrigin.IsHttps(siteUri) ||
+            !SharePointOrigin.IsHttps(serviceEndpointUri) ||
             !string.Equals(siteUri.Host, serviceEndpointUri.Host, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("SharePoint site and API endpoint must use HTTPS on the same host.");
@@ -92,72 +85,19 @@ internal sealed class SharePointWebSession : Form
 
         _siteUri = siteUri;
         _serviceEndpointUri = serviceEndpointUri;
-
-        Text = "Microsoft 365 サインイン（本人権限）";
-        StartPosition = FormStartPosition.CenterParent;
-        MinimumSize = new Size(860, 620);
-        Size = new Size(1050, 760);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ControlBox = false;
-
-        _webView.Dock = DockStyle.Fill;
-
-        _statusLabel.AutoSize = true;
-        _statusLabel.Text = "職場または学校の Microsoft 365 アカウントでサインインしてください。";
-        _statusLabel.Anchor = AnchorStyles.Left;
-
-        _verifyButton.Text = "ログイン完了を確認";
-        _verifyButton.AutoSize = true;
-        _verifyButton.Enabled = false;
-        _verifyButton.Click += VerifyButtonOnClick;
-
-        _reloadButton.Text = "ページを再読み込み";
-        _reloadButton.AutoSize = true;
-        _reloadButton.Enabled = false;
-        _reloadButton.Click += (_, _) => NavigateToSite();
-
-        _cancelButton.Text = "キャンセル";
-        _cancelButton.AutoSize = true;
-        _cancelButton.DialogResult = DialogResult.Cancel;
-
-        var footer = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            ColumnCount = 4,
-            Padding = new Padding(8),
-        };
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        footer.Controls.Add(_statusLabel, 0, 0);
-        footer.Controls.Add(_verifyButton, 1, 0);
-        footer.Controls.Add(_reloadButton, 2, 0);
-        footer.Controls.Add(_cancelButton, 3, 0);
-
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-        };
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.Controls.Add(_webView, 0, 0);
-        layout.Controls.Add(footer, 0, 1);
-        Controls.Add(layout);
-        CancelButton = _cancelButton;
-        _navigationTimer.Tick += (_, _) =>
-        {
-            _navigationTimer.Stop();
-            _reloadButton.Enabled = true;
-            _statusLabel.Text = "ページの読み込みに時間がかかっています。再読み込みを試してください。";
-        };
-        Shown += SharePointWebSessionOnShown;
+        _signInForm = new SharePointSignInForm(siteUri, () => !_pending.IsEmpty, VerifySiteTitleAsync);
+        _signInForm.WebMessageReceived += WebMessageReceived;
+        _signInForm.BrowserFailed += SignInFormOnBrowserFailed;
+        _signInForm.SignedOut += SignInFormOnSignedOut;
     }
 
     public bool IsVerified => _verified;
+
+    /// <summary>
+    /// Shows the sign-in window. The window is kept afterwards: every request below runs inside
+    /// the page it leaves behind, so it is only torn down when the session is.
+    /// </summary>
+    public DialogResult ShowDialog(IWin32Window owner) => _signInForm.ShowDialog(owner);
 
     /// <summary>Raised when a request has to wait out SharePoint throttling.</summary>
     public event EventHandler<TimeSpan>? ThrottleWaitStarted;
@@ -174,145 +114,18 @@ internal sealed class SharePointWebSession : Form
         }
     }
 
-    private async void SharePointWebSessionOnShown(object? sender, EventArgs eventArgs)
-    {
-        try
-        {
-            _statusLabel.Text = "Web表示を初期化しています...";
-            await InitializeAsync(CancellationToken.None);
-            if (!IsDisposed)
-            {
-                NavigateToSite();
-            }
-        }
-        catch (Exception exception)
-        {
-            if (IsDisposed)
-            {
-                return;
-            }
+    /// <summary>Confirms the sign-in on the window's behalf; it cannot make requests itself.</summary>
+    private async Task<string> VerifySiteTitleAsync(CancellationToken cancellationToken) =>
+        (await VerifyAsync(cancellationToken)).Title;
 
-            _verifyButton.Enabled = false;
-            _reloadButton.Enabled = false;
-            _statusLabel.Text = "Web表示を初期化できませんでした。";
-            MessageBox.Show(
-                this,
-                exception.Message,
-                "Web表示の初期化",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-            DialogResult = DialogResult.Cancel;
-        }
-    }
+    private void SignInFormOnBrowserFailed(object? sender, string reason) =>
+        FailPendingRequests(new InvalidOperationException(reason));
 
-    public async Task InitializeAsync(CancellationToken cancellationToken)
-    {
-        if (_initialized)
-        {
-            return;
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        var userDataFolder = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "OneDriveVersionCleaner",
-            "WebView2");
-        Directory.CreateDirectory(userDataFolder);
-
-        var environment = await CoreWebView2Environment.CreateAsync(
-            browserExecutableFolder: null,
-            userDataFolder: userDataFolder);
-        cancellationToken.ThrowIfCancellationRequested();
-        await _webView.EnsureCoreWebView2Async(environment);
-
-        _webView.CoreWebView2.WebMessageReceived += WebMessageReceived;
-        _webView.CoreWebView2.NavigationStarting += (_, eventArgs) =>
-        {
-            if (!_pending.IsEmpty)
-            {
-                eventArgs.Cancel = true;
-                return;
-            }
-
-            _navigationTimer.Stop();
-            _navigationTimer.Start();
-            _verifyButton.Enabled = false;
-            _reloadButton.Enabled = false;
-            _statusLabel.Text = Uri.TryCreate(eventArgs.Uri, UriKind.Absolute, out var destination) &&
-                string.Equals(destination.Host, _siteUri.Host, StringComparison.OrdinalIgnoreCase)
-                ? "本人のOneDriveページを読み込んでいます..."
-                : "Microsoft 365のサインインを待っています...";
-        };
-        _webView.CoreWebView2.NavigationCompleted += (_, eventArgs) =>
-        {
-            _navigationTimer.Stop();
-            _reloadButton.Enabled = true;
-            if (!eventArgs.IsSuccess)
-            {
-                _verifyButton.Enabled = false;
-                _statusLabel.Text = $"ページを開けませんでした: {eventArgs.WebErrorStatus}";
-                return;
-            }
-
-            RefreshVerifyState();
-        };
-
-        // OneDrive Web is a single-page app: after sign-in it routes between /my, / and
-        // /shared without a document navigation, so NavigationCompleted alone goes stale.
-        _webView.CoreWebView2.SourceChanged += (_, _) => RefreshVerifyState();
-        _webView.CoreWebView2.HistoryChanged += (_, _) => RefreshVerifyState();
-        _webView.CoreWebView2.ProcessFailed += (_, eventArgs) =>
-        {
-            _navigationTimer.Stop();
-            _verifyButton.Enabled = false;
-            _reloadButton.Enabled = true;
-            _statusLabel.Text = $"Web表示で問題が発生しました: {eventArgs.ProcessFailedKind}";
-
-            // No reply can arrive once the renderer is gone. Fail the outstanding requests now
-            // instead of leaving every caller to wait out its own timeout.
-            FailPendingRequests(new InvalidOperationException(
-                $"Web表示で問題が発生しました: {eventArgs.ProcessFailedKind}"));
-        };
-        _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
-        _webView.CoreWebView2.Settings.IsWebMessageEnabled = true;
-        _webView.CoreWebView2.Settings.IsStatusBarEnabled = true;
-        _initialized = true;
-    }
-
-    private void RefreshVerifyState()
-    {
-        if (IsDisposed || !_pending.IsEmpty)
-        {
-            return;
-        }
-
-        var source = _webView.CoreWebView2?.Source;
-        if (IsAllowedSiteDocument(source))
-        {
-            _verifyButton.Enabled = true;
-            _statusLabel.Text = "OneDriveを確認できました。「ログイン完了を確認」を押してください。";
-            return;
-        }
-
-        _verifyButton.Enabled = false;
-        _statusLabel.Text = Uri.TryCreate(source, UriKind.Absolute, out var current)
-            ? $"職場または学校のMicrosoft 365アカウントでサインインしてください。（現在: {current.Host}{current.AbsolutePath}）"
-            : "職場または学校のMicrosoft 365アカウントでサインインしてください。";
-    }
-
-    private void NavigateToSite()
-    {
-        if (!_initialized || _webView.CoreWebView2 is null)
-        {
-            return;
-        }
-
-        _verified = false;
-        _verifyButton.Enabled = false;
-        _reloadButton.Enabled = false;
-        _statusLabel.Text = "本人のOneDriveページを開いています...";
-        _webView.CoreWebView2.Navigate(_siteUri.AbsoluteUri);
-    }
+    /// <summary>
+    /// The page is being replaced, so the confirmed sign-in no longer describes what the
+    /// browser is showing.
+    /// </summary>
+    private void SignInFormOnSignedOut(object? sender, EventArgs eventArgs) => _verified = false;
 
     public async Task<SharePointSiteInfo> VerifyAsync(CancellationToken cancellationToken)
     {
@@ -566,48 +379,20 @@ internal sealed class SharePointWebSession : Form
         }
     }
 
-    protected override void Dispose(bool disposing)
+    /// <summary>
+    /// Ends the session and, with it, the signed-in page. Nothing else may dispose the sign-in
+    /// window: every request runs inside that page.
+    /// </summary>
+    public void Dispose()
     {
-        if (disposing)
-        {
-            if (_webView.CoreWebView2 is not null)
-            {
-                _webView.CoreWebView2.WebMessageReceived -= WebMessageReceived;
-            }
+        _signInForm.WebMessageReceived -= WebMessageReceived;
+        _signInForm.BrowserFailed -= SignInFormOnBrowserFailed;
+        _signInForm.SignedOut -= SignInFormOnSignedOut;
+        FailPendingRequests(new ObjectDisposedException(nameof(SharePointWebSession)));
 
-            FailPendingRequests(new ObjectDisposedException(nameof(SharePointWebSession)));
-            _navigationTimer.Dispose();
-
-            // _requestGate is deliberately not disposed: its AvailableWaitHandle is never used,
-            // so disposal buys nothing and would make the Release in an in-flight SendAsync throw.
-            _webView.Dispose();
-        }
-
-        base.Dispose(disposing);
-    }
-
-    private async void VerifyButtonOnClick(object? sender, EventArgs eventArgs)
-    {
-        _verifyButton.Enabled = false;
-        _statusLabel.Text = "ログイン状態を確認しています...";
-        try
-        {
-            var site = await VerifyAsync(CancellationToken.None);
-            _statusLabel.Text = $"接続確認済み: {site.Title}";
-            DialogResult = DialogResult.OK;
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or
-            InvalidDataException or JsonException or TimeoutException)
-        {
-            _statusLabel.Text = "接続確認に失敗しました。表示された詳細を確認してください。";
-            MessageBox.Show(
-                this,
-                exception.Message,
-                "ログイン確認",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-            _verifyButton.Enabled = true;
-        }
+        // _requestGate is deliberately not disposed: its AvailableWaitHandle is never used,
+        // so disposal buys nothing and would make the Release in an in-flight SendAsync throw.
+        _signInForm.Dispose();
     }
 
     /// <summary>
@@ -895,7 +680,7 @@ internal sealed class SharePointWebSession : Form
         string? formDigest,
         CancellationToken cancellationToken)
     {
-        if (!_initialized || _webView.CoreWebView2 is null)
+        if (!_signInForm.IsBrowserReady)
         {
             throw new InvalidOperationException("WebView2セッションが初期化されていません。");
         }
@@ -969,7 +754,7 @@ internal sealed class SharePointWebSession : Form
         {
             // Both the injection and the reply are bounded: an unresponsive renderer must not
             // hold a gate permit forever and stall every other request behind it.
-            await _webView.CoreWebView2.ExecuteScriptAsync(script)
+            await _signInForm.ExecuteScriptAsync(script)
                 .WaitAsync(RequestTimeout, cancellationToken);
             return await completion.Task.WaitAsync(RequestTimeout, cancellationToken);
         }
@@ -1082,7 +867,7 @@ internal sealed class SharePointWebSession : Form
 
     private void ValidateApiEndpoint(Uri endpoint)
     {
-        if (!IsHttps(endpoint) ||
+        if (!SharePointOrigin.IsHttps(endpoint) ||
             !string.Equals(endpoint.Host, _serviceEndpointUri.Host, StringComparison.OrdinalIgnoreCase) ||
             endpoint.Port != _serviceEndpointUri.Port ||
             !endpoint.AbsolutePath.StartsWith(
@@ -1095,7 +880,7 @@ internal sealed class SharePointWebSession : Form
 
     private void ValidateActiveDocument()
     {
-        if (!IsAllowedSiteDocument(_webView.CoreWebView2?.Source))
+        if (!IsAllowedSiteDocument(_signInForm.DocumentSource))
         {
             throw new InvalidOperationException(
                 "OneDriveサイトが表示されていません。サインイン画面を開き直してください。");
@@ -1103,17 +888,11 @@ internal sealed class SharePointWebSession : Form
     }
 
     /// <summary>
-    /// Accepts any document on the personal OneDrive origin. A browser origin is
-    /// scheme + host + port, so the modern OneDrive routes (<c>/my</c>, <c>/</c>,
-    /// <c>/shared</c>) can issue the personal site's REST calls with the same cookies as
-    /// <c>/personal/&lt;user&gt;/...</c>. Which API paths may be called stays restricted by
-    /// <see cref="ValidateApiEndpoint"/>.
+    /// Whether a document may issue this session's requests. Which API paths it may reach stays
+    /// restricted separately, by <see cref="ValidateApiEndpoint"/>.
     /// </summary>
     private bool IsAllowedSiteDocument(string? source) =>
-        Uri.TryCreate(source, UriKind.Absolute, out var sourceUri) &&
-        IsHttps(sourceUri) &&
-        string.Equals(sourceUri.Host, _siteUri.Host, StringComparison.OrdinalIgnoreCase) &&
-        sourceUri.Port == _siteUri.Port;
+        SharePointOrigin.IsSameOrigin(_siteUri, source);
 
     private static T DeserializeBody<T>(BrowserResponse response, string operation)
     {
@@ -1246,9 +1025,6 @@ internal sealed class SharePointWebSession : Form
 
     private static string EncodeODataString(string value) =>
         Uri.EscapeDataString(value.Replace("'", "''", StringComparison.Ordinal));
-
-    private static bool IsHttps(Uri uri) =>
-        uri.IsAbsoluteUri && string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
 
     private sealed record BrowserResponse
     {
