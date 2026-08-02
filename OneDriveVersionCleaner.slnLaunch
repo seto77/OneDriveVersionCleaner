@@ -1,0 +1,11 @@
+[
+  {
+    "Name": "OneDriveVersionCleaner (WinForms)",
+    "Projects": [
+      {
+        "Path": "src\\OneDriveVersionCleaner.App\\OneDriveVersionCleaner.App.csproj",
+        "Action": "Start"
+      }
+    ]
+  }
+]

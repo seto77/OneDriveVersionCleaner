@@ -1,0 +1,12 @@
+bin/
+obj/
+.vs/
+.idea/
+.dotnet/
+*.user
+*.suo
+TestResults/
+artifacts/
+appsettings.json
+!src/OneDriveVersionCleaner.App/appsettings.json
+*.log

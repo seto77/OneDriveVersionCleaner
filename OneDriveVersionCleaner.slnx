@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="src/OneDriveVersionCleaner.Core/OneDriveVersionCleaner.Core.csproj" />
+  <Project Path="src/OneDriveVersionCleaner.Infrastructure/OneDriveVersionCleaner.Infrastructure.csproj" />
+  <Project Path="src/OneDriveVersionCleaner.App/OneDriveVersionCleaner.App.csproj" />
+  <Project Path="src/OneDriveVersionProbe/OneDriveVersionProbe.csproj" />
+  <Project Path="tests/OneDriveVersionCleaner.Core.Tests/OneDriveVersionCleaner.Core.Tests.csproj" />
+  <Project Path="tests/OneDriveVersionCleaner.Infrastructure.Tests/OneDriveVersionCleaner.Infrastructure.Tests.csproj" />
+</Solution>

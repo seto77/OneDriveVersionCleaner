@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OneDriveVersionCleaner (WinForms)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build OneDriveVersionCleaner (WinForms)",
+      "program": "${workspaceFolder}/src/OneDriveVersionCleaner.App/bin/Debug/net10.0-windows/OneDriveVersionCleaner.dll",
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "justMyCode": true
+    }
+  ]
+}
