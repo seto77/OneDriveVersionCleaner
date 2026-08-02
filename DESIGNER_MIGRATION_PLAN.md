@@ -1,14 +1,30 @@
 # WinForms デザイナー対応 移行指示書
 
-作成日: 2026-08-02
+作成日: 2026-08-02 / 移行完了: 2026-08-02
+
+> [!NOTE]
+> **移行は完了しています。** 3つのフォームはすべて `.Designer.cs` を持ち、デザイナーで開けます。
+> 以下は当時の作業指示であり、**そのまま読むと現状と食い違います。** 現在は保守方針として残しています。
+> 「まだデザイナーが使えない」という前提の記述は、当時のものとして読んでください。
+>
+> 移行後に変わった点:
+>
+> - デザイン面の基準文言は**英語**です。日本語は実行時に上乗せします（[README.md](README.md) の「表示言語」）
+> - 保持条件のツールチップは7項目ではなく**6項目**です。「1回の最大移動数」は実装されていません
+> - 無名だったコントロールには名前が付きました（`_exclusionsFlow` / `_exclusionsHeadingLabel` /
+>   `_targetsHeadingLabel` / `_versionsHeaderPanel`）
+> - `MainForm` には言語メニュー（`_menuStrip`）が加わりました
+>
+> 下のチェックリストのうち**コードで確認できるものは満たしています。** 実際にデザイナーで開いて保存し
+> 直す確認（手順5）は、人手でしか行えないため未実施です。
 
 ## この文書について
 
-現在このアプリの UI は、3つのフォームすべてを C# コードで組み立てています。`.Designer.cs` も `.resx` も存在しません。そのため Visual Studio の WinForms ビジュアルデザイナーが使えません。
+移行前、このアプリの UI は3つのフォームすべてを C# コードで組み立てていました。`.Designer.cs` も `.resx` も存在せず、Visual Studio の WinForms ビジュアルデザイナーが使えませんでした。
 
 本書は、デザイナーで編集できる構造へ移行するための指示書です。**別セッションでの実装を想定**しており、前提知識なしで着手できるように書いています。
 
-移行方針は外部レビュー（Codex CLI, `gpt-5.6-sol`）を経ています。その指摘は本書に反映済みです。
+移行方針は外部レビュー（Codex CLI）を経ています。その指摘は本書に反映済みです。
 
 ## 環境の前提
 
@@ -18,7 +34,7 @@
 
 ```console
 dotnet build   # 警告0・エラー0を維持すること
-dotnet test    # 現在151件、すべて成功
+dotnet test    # すべて成功を維持すること（件数は出力を正とする）
 dotnet run --project src/OneDriveVersionCleaner.App
 ```
 
@@ -217,7 +233,7 @@ private void InitializeGridSchema()
 
 `AddPolicyControl` 内の `foreach` によるツールチップ設定は、**ラベル・入力・単位ラベルそれぞれへの個別の `SetToolTip` 呼び出し**に展開してください。
 
-保持条件は7項目あります（`MainForm.cs:227-256`）。説明文は現在の文言をそのまま引き継いでください。利用者からの指摘を受けて調整した経緯があり、意味が変わると混乱します。
+条件は6項目あります（現在は `MainForm.Localization.cs` の `ApplyLocalizedToolTips`）。説明文は現在の文言をそのまま引き継いでください。利用者からの指摘を受けて調整した経緯があり、意味が変わると混乱します。訳すのは構いませんが、主張している内容を書き換えないでください。
 
 ### ContextMenuStrip
 
@@ -261,7 +277,7 @@ private void InitializeGridSchema()
 ## 検証手順
 
 1. `dotnet build` — **警告0・エラー0**
-2. `dotnet test` — **151件成功**
+2. `dotnet test` — **全件成功**
 3. `dotnet run --project src/OneDriveVersionCleaner.App` — 起動して例外が出ない
 4. Visual Studio 2026 で `MainForm.cs` と `DeleteConfirmationForm.cs` をデザイナーで開ける
 5. デザイナーで何か小さな変更（ボタン位置など）をして保存し、**再度開いて壊れていない**ことを確認する

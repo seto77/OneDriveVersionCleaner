@@ -4,7 +4,8 @@ namespace OneDriveVersionCleaner.Infrastructure.Tests;
 
 public sealed class OneDriveBusinessAccountDiscoveryTests
 {
-    private const string TenantId = "dc6b9ce9-a6ba-4ed3-bd67-9f9e3ac85cf1";
+    // Obviously synthetic, so nobody has to wonder whether a real tenant leaked into a fixture.
+    private const string TenantId = "00000000-0000-4000-8000-000000000001";
 
     [Fact]
     public void Discover_NormalizesAValidBusinessAccountAndDerivesSiteUri()
