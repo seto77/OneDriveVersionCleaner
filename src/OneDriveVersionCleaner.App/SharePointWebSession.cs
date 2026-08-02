@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using OneDriveVersionCleaner.Core.Models;
 using OneDriveVersionCleaner.Core.Retry;
+using static OneDriveVersionCleaner.App.Localization.Localization;
 
 namespace OneDriveVersionCleaner.App;
 
@@ -98,6 +99,12 @@ internal sealed class SharePointWebSession : IDisposable
     /// </summary>
     public DialogResult ShowDialog(IWin32Window owner) => _signInForm.ShowDialog(owner);
 
+    /// <summary>
+    /// Re-translates the sign-in window. It outlives its own dialog, so a language change while
+    /// a session is alive has to reach it here rather than at its next construction.
+    /// </summary>
+    public void ApplyLocalizedText() => _signInForm.ApplyLocalizedText();
+
     /// <summary>Raised when a request has to wait out SharePoint throttling.</summary>
     public event EventHandler<TimeSpan>? ThrottleWaitStarted;
 
@@ -130,11 +137,15 @@ internal sealed class SharePointWebSession : IDisposable
     {
         var endpoint = BuildApiUri("web?$select=Title,Url");
         var response = await SendGetAsync(endpoint, cancellationToken);
-        EnsureSuccess(response, "SharePointへのログイン確認");
-        var result = DeserializeBody<SharePointSiteInfo>(response, "SharePointサイト情報");
+        EnsureSuccess(response, Loc(en: "Confirming the SharePoint sign-in", ja: "SharePointへのログイン確認"));
+        var result = DeserializeBody<SharePointSiteInfo>(
+            response,
+            Loc(en: "Reading the SharePoint site info", ja: "SharePointサイト情報"));
         if (string.IsNullOrWhiteSpace(result.Url))
         {
-            throw new InvalidDataException("SharePointサイトURLを取得できませんでした。");
+            throw new InvalidDataException(Loc(
+                en: "The SharePoint site URL could not be read.",
+                ja: "SharePointサイトURLを取得できませんでした。"));
         }
 
         _verified = true;
@@ -147,35 +158,48 @@ internal sealed class SharePointWebSession : IDisposable
         EnsureVerified();
         var result = await GetSingleAsync<SharePointFolderInfo>(
             BuildApiUri("web/DefaultDocumentLibrary/RootFolder"),
-            "OneDriveルートの取得",
+            Loc(en: "Reading the OneDrive root", ja: "OneDriveルートの取得"),
             cancellationToken);
         if (string.IsNullOrWhiteSpace(result.Path))
         {
-            throw new InvalidDataException("OneDriveのサーバー相対URLを取得できませんでした。");
+            throw new InvalidDataException(Loc(
+                en: "The server-relative OneDrive URL could not be read.",
+                ja: "OneDriveのサーバー相対URLを取得できませんでした。"));
         }
 
         return result;
     }
 
     /// <summary>
-    /// Runs a read against the path form of a resource and, if that is rejected, against its
-    /// unique id. A name that cannot be round-tripped through a URL, or a path that is simply
-    /// too long, fails before the OData layer ever sees it; the id form is short and carries
-    /// no characters of its own.
+    /// Addresses a file by its unique id when one is known, and by its path otherwise, falling
+    /// back to the other form if the first is rejected.
     /// </summary>
-    private static async Task<T> ReadWithIdFallbackAsync<T>(
+    /// <remarks>
+    /// The id comes first on purpose. A path names a location, and a location can come to hold a
+    /// different file between one request and the next — a rename or a replacement is enough. The
+    /// id names the item itself, so nothing that happens to the path can redirect the request to
+    /// something else. Callers that have no id (the scan, which is discovering files by path in
+    /// the first place) get the path form and no fallback.
+    /// <para>
+    /// The path form still earns its place as the fallback: a name that cannot be round-tripped
+    /// through a URL, or a path that is simply too long, fails before the OData layer sees it.
+    /// </para>
+    /// </remarks>
+    private static async Task<T> ReadByIdOrPathAsync<T>(
         Func<string, Task<T>> read,
         string pathResource,
         string? idResource)
     {
+        var preferred = idResource ?? pathResource;
+        var alternate = idResource is null ? null : pathResource;
         try
         {
-            return await read(pathResource);
+            return await read(preferred);
         }
-        catch (Exception exception) when (idResource is not null &&
+        catch (Exception exception) when (alternate is not null &&
             exception is InvalidOperationException or InvalidDataException)
         {
-            return await read(idResource);
+            return await read(alternate);
         }
     }
 
@@ -190,7 +214,7 @@ internal sealed class SharePointWebSession : IDisposable
         {
             return await GetSingleAsync<SharePointVersioningInfo>(
                 BuildApiUri("web/DefaultDocumentLibrary?$select=EnableVersioning"),
-                "ライブラリのバージョン設定の取得",
+                Loc(en: "Reading the library's versioning settings", ja: "ライブラリのバージョン設定の取得"),
                 cancellationToken);
         }
         catch (Exception exception) when (exception is InvalidOperationException or
@@ -216,10 +240,10 @@ internal sealed class SharePointWebSession : IDisposable
         EnsureVerified();
         ArgumentException.ThrowIfNullOrWhiteSpace(serverRelativePath);
 
-        var fileTask = ReadWithIdFallbackAsync(
+        var fileTask = ReadByIdOrPathAsync(
             resource => GetSingleAsync<SharePointFileInfo>(
                 BuildApiUri(resource),
-                "対象ファイルの取得",
+                Loc(en: "Reading the file", ja: "対象ファイルの取得"),
                 cancellationToken),
             FileResource(serverRelativePath),
             uniqueId == Guid.Empty ? null : FileResourceById(uniqueId));
@@ -250,7 +274,8 @@ internal sealed class SharePointWebSession : IDisposable
             return new DeleteResult
             {
                 Status = DeleteResultStatus.NotDeletable,
-                Error = $"SharePointのバージョンIDとして扱えません: {versionId}",
+                Error = Loc(en: "Not usable as a SharePoint version id", ja: "SharePointのバージョンIDとして扱えません") +
+                        $": {versionId}",
             };
         }
 
@@ -258,7 +283,7 @@ internal sealed class SharePointWebSession : IDisposable
 
         try
         {
-            var response = await ReadWithIdFallbackAsync(
+            var response = await ReadByIdOrPathAsync(
                 resource => PostWithDigestAsync(BuildApiUri(resource + recycle), cancellationToken),
                 FileResource(serverRelativePath),
                 uniqueId == Guid.Empty ? null : FileResourceById(uniqueId));
@@ -299,7 +324,7 @@ internal sealed class SharePointWebSession : IDisposable
     private Task<IReadOnlyList<SharePointFileVersionInfo>> GetVersionsAsync(
         string serverRelativePath,
         Guid uniqueId,
-        CancellationToken cancellationToken) => ReadWithIdFallbackAsync(
+        CancellationToken cancellationToken) => ReadByIdOrPathAsync(
         resource => ReadVersionsAsync(resource, cancellationToken),
         FileResource(serverRelativePath),
         uniqueId == Guid.Empty ? null : FileResourceById(uniqueId));
@@ -308,7 +333,7 @@ internal sealed class SharePointWebSession : IDisposable
         string fileResource,
         CancellationToken cancellationToken) => GetCollectionAsync<SharePointFileVersionInfo>(
         BuildApiUri($"{fileResource}/Versions?$select={VersionSelect},CreatedBy/Title&$expand=CreatedBy"),
-        "バージョン履歴の取得",
+        Loc(en: "Reading the version history", ja: "バージョン履歴の取得"),
         cancellationToken);
 
     private async Task<T> GetSingleAsync<T>(Uri endpoint, string operation, CancellationToken cancellationToken)
@@ -355,7 +380,9 @@ internal sealed class SharePointWebSession : IDisposable
         if (!Uri.TryCreate(page, nextLink, out var uri))
         {
             throw new InvalidDataException(
-                $"SharePointの次ページURLを解釈できませんでした: {nextLink}");
+                Loc(en: "The SharePoint next-page URL could not be resolved",
+                    ja: "SharePointの次ページURLを解釈できませんでした") +
+                $": {nextLink}");
         }
 
         // The service owns this URL, but it still has to stay inside the personal site.
@@ -422,8 +449,9 @@ internal sealed class SharePointWebSession : IDisposable
             }
         }
 
-        throw new SharePointThrottledException(
-            "SharePointの要求制限が続いているため中断しました。待機して再試行しましたが解消しませんでした。");
+        throw new SharePointThrottledException(Loc(
+            en: "Stopped because SharePoint kept throttling. Waiting and retrying did not clear it.",
+            ja: "SharePointの要求制限が続いているため中断しました。待機して再試行しましたが解消しませんでした。"));
     }
 
     private void ExhaustThrottleBudget()
@@ -518,7 +546,9 @@ internal sealed class SharePointWebSession : IDisposable
     {
         if (!_signInForm.IsBrowserReady)
         {
-            throw new InvalidOperationException("WebView2セッションが初期化されていません。");
+            throw new InvalidOperationException(Loc(
+                en: "The WebView2 session is not initialized.",
+                ja: "WebView2セッションが初期化されていません。"));
         }
 
         ValidateApiEndpoint(endpoint);
@@ -533,7 +563,9 @@ internal sealed class SharePointWebSession : IDisposable
         if (!_pending.TryAdd(requestId, completion))
         {
             _requestGate.Release();
-            throw new InvalidOperationException("SharePoint要求IDを作成できませんでした。");
+            throw new InvalidOperationException(Loc(
+                en: "A SharePoint request id could not be created.",
+                ja: "SharePoint要求IDを作成できませんでした。"));
         }
 
         var request = JsonSerializer.Serialize(new
@@ -626,11 +658,17 @@ internal sealed class SharePointWebSession : IDisposable
         }
 
         var response = await SendAsync("POST", BuildApiUri("contextinfo"), formDigest: null, cancellationToken);
-        EnsureSuccess(response, "SharePointの更新トークン取得");
-        var context = DeserializeBody<SharePointContextInfo>(response, "SharePointコンテキスト情報").Resolve();
+        EnsureSuccess(response, Loc(
+            en: "Reading the SharePoint update token",
+            ja: "SharePointの更新トークン取得"));
+        var context = DeserializeBody<SharePointContextInfo>(
+            response,
+            Loc(en: "Reading the SharePoint context info", ja: "SharePointコンテキスト情報")).Resolve();
         if (string.IsNullOrWhiteSpace(context.FormDigestValue))
         {
-            throw new InvalidDataException("SharePointの更新トークンを取得できませんでした。");
+            throw new InvalidDataException(Loc(
+                en: "The SharePoint update token could not be read.",
+                ja: "SharePointの更新トークンを取得できませんでした。"));
         }
 
         // Renew a minute early so a long run never posts with a digest that expires in flight.
@@ -704,7 +742,9 @@ internal sealed class SharePointWebSession : IDisposable
                 _serviceEndpointUri.AbsolutePath.TrimEnd('/') + '/',
                 StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("許可されていないSharePoint API URLです。");
+            throw new InvalidOperationException(Loc(
+                en: "That SharePoint API URL is not allowed.",
+                ja: "許可されていないSharePoint API URLです。"));
         }
     }
 
@@ -712,8 +752,9 @@ internal sealed class SharePointWebSession : IDisposable
     {
         if (!IsAllowedSiteDocument(_signInForm.DocumentSource))
         {
-            throw new InvalidOperationException(
-                "OneDriveサイトが表示されていません。サインイン画面を開き直してください。");
+            throw new InvalidOperationException(Loc(
+                en: "The OneDrive site is not on screen. Open the sign-in window again.",
+                ja: "OneDriveサイトが表示されていません。サインイン画面を開き直してください。"));
         }
     }
 
@@ -737,12 +778,16 @@ internal sealed class SharePointWebSession : IDisposable
             }
 
             return payload.Deserialize<T>(JsonOptions)
-                   ?? throw new InvalidDataException($"{operation}の応答が空です。");
+                   ?? throw new InvalidDataException(Loc(
+                       en: $"{operation}: the response was empty.",
+                       ja: $"{operation}の応答が空です。"));
         }
         catch (JsonException exception)
         {
             throw new InvalidDataException(
-                $"{operation}の応答を解析できませんでした。Microsoft 365へのログイン状態を確認してください。",
+                Loc(en: $"{operation}: the response could not be parsed. " +
+                        "Check that you are still signed in to Microsoft 365.",
+                    ja: $"{operation}の応答を解析できませんでした。Microsoft 365へのログイン状態を確認してください。"),
                 exception);
         }
     }
@@ -756,14 +801,19 @@ internal sealed class SharePointWebSession : IDisposable
 
         if (IsThrottled(response))
         {
-            throw new SharePointThrottledException(
-                $"{operation}が SharePoint の要求制限にかかりました。待機して再試行しましたが解消しませんでした。" +
-                "しばらく時間をおいてから、対象フォルダーを分けて実行してください。");
+            throw new SharePointThrottledException(Loc(
+                en: $"{operation}: SharePoint throttled the request. Waiting and retrying did not " +
+                    "clear it. Leave it a while, then run one folder at a time.",
+                ja: $"{operation}が SharePoint の要求制限にかかりました。待機して再試行しましたが解消しませんでした。" +
+                    "しばらく時間をおいてから、対象フォルダーを分けて実行してください。"));
         }
 
-        throw new InvalidOperationException(
-            $"{operation}に失敗しました (HTTP {response.Status}: {BuildFailureDetail(response)})。" +
-            "通常の組織アカウントでサインインし、OneDriveページが表示されていることを確認してください。");
+        throw new InvalidOperationException(Loc(
+            en: $"{operation} failed (HTTP {response.Status}: {BuildFailureDetail(response)}). " +
+                "Check that you are signed in with an ordinary work account and that the OneDrive " +
+                "page is showing.",
+            ja: $"{operation}に失敗しました (HTTP {response.Status}: {BuildFailureDetail(response)})。" +
+                "通常の組織アカウントでサインインし、OneDriveページが表示されていることを確認してください。"));
     }
 
     private static string BuildFailureDetail(BrowserResponse response)
@@ -782,10 +832,14 @@ internal sealed class SharePointWebSession : IDisposable
 
         if (Uri.TryCreate(response.ResponseUrl, UriKind.Absolute, out var responseUri))
         {
-            parts.Add($"応答先={responseUri.Host}{responseUri.AbsolutePath}");
+            parts.Add(
+                Loc(en: "responded-from", ja: "応答先") +
+                $"={responseUri.Host}{responseUri.AbsolutePath}");
         }
 
-        return parts.Count == 0 ? "応答なし" : string.Join(", ", parts);
+        return parts.Count == 0
+            ? Loc(en: "no response", ja: "応答なし")
+            : string.Join(", ", parts);
     }
 
     private static DeleteResultStatus MapDeleteFailure(int status) => status switch
@@ -849,7 +903,9 @@ internal sealed class SharePointWebSession : IDisposable
     {
         if (!_verified)
         {
-            throw new InvalidOperationException("SharePointへのログイン確認が完了していません。");
+            throw new InvalidOperationException(Loc(
+                en: "The SharePoint sign-in has not been confirmed yet.",
+                ja: "SharePointへのログイン確認が完了していません。"));
         }
     }
 

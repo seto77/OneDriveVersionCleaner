@@ -23,7 +23,9 @@ public sealed class ByteSizeFormatterTests
     [Fact]
     public void Format_NullIsNotDisplayedAsZero()
     {
-        Assert.Equal("不明", ByteSizeFormatter.Format((long?)null));
+        // The wording belongs to whoever is going to show it, which is why there is no default.
+        Assert.Equal("Unknown", ByteSizeFormatter.Format(null, unknownText: "Unknown"));
+        Assert.Equal("", ByteSizeFormatter.Format(null, unknownText: ""));
     }
 
     [Fact]

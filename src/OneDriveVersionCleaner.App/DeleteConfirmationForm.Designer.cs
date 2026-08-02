@@ -70,11 +70,11 @@ namespace OneDriveVersionCleaner.App
             _notesLabel.MaximumSize = new Size(660, 0);
             _notesLabel.Name = "_notesLabel";
             _notesLabel.Text =
-                "・ファイル本体と現行バージョンは対象になりません。\r\n" +
-                "・移動したバージョンはOneDriveのごみ箱から復元できます。\r\n" +
-                "・ごみ箱の項目も容量を消費します。容量を戻すにはごみ箱を空にしてください。\r\n" +
-                "・保持ポリシーや訴訟ホールドの対象は、移動できない場合があります。\r\n" +
-                "・移動の直後に、ローカルの現行ファイルが無事かを自動で確認します。";
+                "• The file itself and its current version are never touched.\r\n" +
+                "• Moved versions can be restored from the OneDrive recycle bin.\r\n" +
+                "• Recycle bin items still use quota. Empty it to get the space back.\r\n" +
+                "• Versions under a retention policy or a legal hold may refuse to move.\r\n" +
+                "• The local copy of the current file is checked right after the move.";
             //
             // _targetGroup
             //
@@ -82,7 +82,7 @@ namespace OneDriveVersionCleaner.App
             _targetGroup.Margin = new Padding(0, 0, 0, 12);
             _targetGroup.Name = "_targetGroup";
             _targetGroup.Padding = new Padding(6);
-            _targetGroup.Text = "移動するバージョン";
+            _targetGroup.Text = "Versions to move";
             _targetGroup.Controls.Add(_targetBox);
             //
             // _targetBox
@@ -110,7 +110,7 @@ namespace OneDriveVersionCleaner.App
             _cancelButton.AutoSize = true;
             _cancelButton.DialogResult = DialogResult.Cancel;
             _cancelButton.Name = "_cancelButton";
-            _cancelButton.Text = "キャンセル";
+            _cancelButton.Text = "Cancel";
             //
             // _executeButton
             //
@@ -118,7 +118,7 @@ namespace OneDriveVersionCleaner.App
             _executeButton.DialogResult = DialogResult.OK;
             _executeButton.ForeColor = Color.Firebrick;
             _executeButton.Name = "_executeButton";
-            _executeButton.Text = "ごみ箱へ移動";
+            _executeButton.Text = "Move to recycle bin";
             //
             // DeleteConfirmationForm
             //
@@ -132,7 +132,7 @@ namespace OneDriveVersionCleaner.App
             ShowInTaskbar = false;
             Size = new Size(740, 600);
             StartPosition = FormStartPosition.CenterParent;
-            Text = "ごみ箱へ移動する確認";
+            Text = "Confirm move to recycle bin";
             Controls.Add(_layout);
             _layout.ResumeLayout(false);
             _layout.PerformLayout();

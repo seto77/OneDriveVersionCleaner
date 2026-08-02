@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
+using static OneDriveVersionCleaner.App.Localization.Localization;
 
 namespace OneDriveVersionCleaner.App;
 
@@ -47,7 +48,36 @@ internal sealed partial class SharePointSignInForm : Form
         _verifyAsync = verifyAsync;
 
         InitializeComponent();
+        ApplyLocalizedText();
     }
+
+    /// <summary>
+    /// Puts the current interface language over the English the design surface carries. Called
+    /// again when the language changes, which is why the status line is re-derived rather than
+    /// left showing a sentence in the language it was written in.
+    /// </summary>
+    public void ApplyLocalizedText()
+    {
+        Text = Loc(
+            en: "Microsoft 365 sign-in (your own account)",
+            ja: "Microsoft 365 サインイン（本人権限）");
+        _verifyButton.Text = Loc(en: "Confirm sign-in", ja: "ログイン完了を確認");
+        _reloadButton.Text = Loc(en: "Reload page", ja: "ページを再読み込み");
+        _cancelButton.Text = Loc(en: "Cancel", ja: "キャンセル");
+
+        if (_initialized)
+        {
+            RefreshVerifyState();
+        }
+        else
+        {
+            _statusLabel.Text = SignInPrompt();
+        }
+    }
+
+    private static string SignInPrompt() => Loc(
+        en: "Sign in with your work or school Microsoft 365 account.",
+        ja: "職場または学校のMicrosoft 365アカウントでサインインしてください。");
 
     /// <summary>Raised for every message the page posts back.</summary>
     public event EventHandler<CoreWebView2WebMessageReceivedEventArgs>? WebMessageReceived;
@@ -68,7 +98,9 @@ internal sealed partial class SharePointSignInForm : Form
 
     public Task<string> ExecuteScriptAsync(string script) => _webView.CoreWebView2 is { } browser
         ? browser.ExecuteScriptAsync(script)
-        : throw new InvalidOperationException("WebView2セッションが初期化されていません。");
+        : throw new InvalidOperationException(Loc(
+            en: "The WebView2 session is not initialized.",
+            ja: "WebView2セッションが初期化されていません。"));
 
     /// <summary>
     /// Creating the browser is runtime work, so it starts here rather than anywhere the
@@ -79,7 +111,9 @@ internal sealed partial class SharePointSignInForm : Form
         base.OnShown(eventArgs);
         try
         {
-            _statusLabel.Text = "Web表示を初期化しています...";
+            _statusLabel.Text = Loc(
+                en: "Starting the embedded browser...",
+                ja: "Web表示を初期化しています...");
             await InitializeBrowserAsync(CancellationToken.None);
             if (!IsDisposed)
             {
@@ -95,11 +129,13 @@ internal sealed partial class SharePointSignInForm : Form
 
             _verifyButton.Enabled = false;
             _reloadButton.Enabled = false;
-            _statusLabel.Text = "Web表示を初期化できませんでした。";
+            _statusLabel.Text = Loc(
+                en: "The embedded browser could not be started.",
+                ja: "Web表示を初期化できませんでした。");
             MessageBox.Show(
                 this,
                 exception.Message,
-                "Web表示の初期化",
+                Loc(en: "Embedded browser", ja: "Web表示の初期化"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             DialogResult = DialogResult.Cancel;
@@ -163,8 +199,8 @@ internal sealed partial class SharePointSignInForm : Form
         _reloadButton.Enabled = false;
         _statusLabel.Text = Uri.TryCreate(eventArgs.Uri, UriKind.Absolute, out var destination) &&
             string.Equals(destination.Host, _siteUri.Host, StringComparison.OrdinalIgnoreCase)
-            ? "本人のOneDriveページを読み込んでいます..."
-            : "Microsoft 365のサインインを待っています...";
+            ? Loc(en: "Loading your OneDrive page...", ja: "本人のOneDriveページを読み込んでいます...")
+            : Loc(en: "Waiting for the Microsoft 365 sign-in...", ja: "Microsoft 365のサインインを待っています...");
     }
 
     private void BrowserOnNavigationCompleted(
@@ -176,7 +212,9 @@ internal sealed partial class SharePointSignInForm : Form
         if (!eventArgs.IsSuccess)
         {
             _verifyButton.Enabled = false;
-            _statusLabel.Text = $"ページを開けませんでした: {eventArgs.WebErrorStatus}";
+            _statusLabel.Text =
+                Loc(en: "The page could not be opened", ja: "ページを開けませんでした") +
+                $": {eventArgs.WebErrorStatus}";
             return;
         }
 
@@ -196,7 +234,9 @@ internal sealed partial class SharePointSignInForm : Form
         _navigationTimer.Stop();
         _verifyButton.Enabled = false;
         _reloadButton.Enabled = true;
-        var message = $"Web表示で問題が発生しました: {eventArgs.ProcessFailedKind}";
+        var message =
+            Loc(en: "The embedded browser failed", ja: "Web表示で問題が発生しました") +
+            $": {eventArgs.ProcessFailedKind}";
         _statusLabel.Text = message;
 
         // No reply can arrive once the renderer is gone. The session fails the outstanding
@@ -208,7 +248,9 @@ internal sealed partial class SharePointSignInForm : Form
     {
         _navigationTimer.Stop();
         _reloadButton.Enabled = true;
-        _statusLabel.Text = "ページの読み込みに時間がかかっています。再読み込みを試してください。";
+        _statusLabel.Text = Loc(
+            en: "The page is taking a long time to load. Try reloading it.",
+            ja: "ページの読み込みに時間がかかっています。再読み込みを試してください。");
     }
 
     private void ReloadButtonOnClick(object? sender, EventArgs eventArgs) => NavigateToSite();
@@ -216,21 +258,25 @@ internal sealed partial class SharePointSignInForm : Form
     private async void VerifyButtonOnClick(object? sender, EventArgs eventArgs)
     {
         _verifyButton.Enabled = false;
-        _statusLabel.Text = "ログイン状態を確認しています...";
+        _statusLabel.Text = Loc(
+            en: "Checking the sign-in...",
+            ja: "ログイン状態を確認しています...");
         try
         {
             var title = await _verifyAsync(CancellationToken.None);
-            _statusLabel.Text = $"接続確認済み: {title}";
+            _statusLabel.Text = Loc(en: "Signed in", ja: "接続確認済み") + $": {title}";
             DialogResult = DialogResult.OK;
         }
         catch (Exception exception) when (exception is InvalidOperationException or
             InvalidDataException or JsonException or TimeoutException)
         {
-            _statusLabel.Text = "接続確認に失敗しました。表示された詳細を確認してください。";
+            _statusLabel.Text = Loc(
+                en: "The sign-in could not be confirmed. See the details shown.",
+                ja: "接続確認に失敗しました。表示された詳細を確認してください。");
             MessageBox.Show(
                 this,
                 exception.Message,
-                "ログイン確認",
+                Loc(en: "Sign-in check", ja: "ログイン確認"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             _verifyButton.Enabled = true;
@@ -248,14 +294,18 @@ internal sealed partial class SharePointSignInForm : Form
         if (SharePointOrigin.IsSameOrigin(_siteUri, source))
         {
             _verifyButton.Enabled = true;
-            _statusLabel.Text = "OneDriveを確認できました。「ログイン完了を確認」を押してください。";
+            _statusLabel.Text = Loc(
+                en: "Your OneDrive is showing. Press “Confirm sign-in”.",
+                ja: "OneDriveを確認できました。「ログイン完了を確認」を押してください。");
             return;
         }
 
         _verifyButton.Enabled = false;
         _statusLabel.Text = Uri.TryCreate(source, UriKind.Absolute, out var current)
-            ? $"職場または学校のMicrosoft 365アカウントでサインインしてください。（現在: {current.Host}{current.AbsolutePath}）"
-            : "職場または学校のMicrosoft 365アカウントでサインインしてください。";
+            ? SignInPrompt() +
+              Loc(en: $" (currently: {current.Host}{current.AbsolutePath})",
+                  ja: $"（現在: {current.Host}{current.AbsolutePath}）")
+            : SignInPrompt();
     }
 
     private void NavigateToSite()
@@ -268,7 +318,9 @@ internal sealed partial class SharePointSignInForm : Form
         SignedOut?.Invoke(this, EventArgs.Empty);
         _verifyButton.Enabled = false;
         _reloadButton.Enabled = false;
-        _statusLabel.Text = "本人のOneDriveページを開いています...";
+        _statusLabel.Text = Loc(
+            en: "Opening your OneDrive page...",
+            ja: "本人のOneDriveページを開いています...");
         browser.Navigate(_siteUri.AbsoluteUri);
     }
 }

@@ -81,14 +81,14 @@ namespace OneDriveVersionCleaner.App
             _statusLabel.Anchor = AnchorStyles.Left;
             _statusLabel.AutoSize = true;
             _statusLabel.Name = "_statusLabel";
-            _statusLabel.Text = "職場または学校の Microsoft 365 アカウントでサインインしてください。";
+            _statusLabel.Text = "Sign in with your work or school Microsoft 365 account.";
             //
             // _verifyButton
             //
             _verifyButton.AutoSize = true;
             _verifyButton.Enabled = false;
             _verifyButton.Name = "_verifyButton";
-            _verifyButton.Text = "ログイン完了を確認";
+            _verifyButton.Text = "Confirm sign-in";
             _verifyButton.Click += VerifyButtonOnClick;
             //
             // _reloadButton
@@ -96,7 +96,7 @@ namespace OneDriveVersionCleaner.App
             _reloadButton.AutoSize = true;
             _reloadButton.Enabled = false;
             _reloadButton.Name = "_reloadButton";
-            _reloadButton.Text = "ページを再読み込み";
+            _reloadButton.Text = "Reload page";
             _reloadButton.Click += ReloadButtonOnClick;
             //
             // _cancelButton
@@ -104,7 +104,7 @@ namespace OneDriveVersionCleaner.App
             _cancelButton.AutoSize = true;
             _cancelButton.DialogResult = DialogResult.Cancel;
             _cancelButton.Name = "_cancelButton";
-            _cancelButton.Text = "キャンセル";
+            _cancelButton.Text = "Cancel";
             //
             // _navigationTimer
             //
@@ -120,7 +120,7 @@ namespace OneDriveVersionCleaner.App
             Name = "SharePointSignInForm";
             Size = new Size(1050, 760);
             StartPosition = FormStartPosition.CenterParent;
-            Text = "Microsoft 365 サインイン（本人権限）";
+            Text = "Microsoft 365 sign-in (your own account)";
             Controls.Add(_layout);
             _layout.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)_webView).EndInit();

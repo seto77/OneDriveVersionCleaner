@@ -1,6 +1,7 @@
 using System.Globalization;
 using OneDriveVersionCleaner.Core.Deletion;
 using OneDriveVersionCleaner.Core.Models;
+using static OneDriveVersionCleaner.App.Localization.Localization;
 
 namespace OneDriveVersionCleaner.App;
 
@@ -55,8 +56,9 @@ internal sealed class VersionDeletionRunner(
             var serverRelativePath = serverRelativePathResolver(file.File);
             if (string.IsNullOrWhiteSpace(serverRelativePath))
             {
-                RecordAll(outcomes, file, DeleteResultStatus.PermanentError,
-                    "OneDrive上の位置を特定できませんでした。再度スキャンしてください。");
+                RecordAll(outcomes, file, DeleteResultStatus.PermanentError, Loc(
+                    en: "Its location on OneDrive could not be resolved. Scan again.",
+                    ja: "OneDrive上の位置を特定できませんでした。再度スキャンしてください。"));
                 continue;
             }
 
@@ -72,8 +74,9 @@ internal sealed class VersionDeletionRunner(
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                RecordAll(outcomes, file, DeleteResultStatus.TransientError,
-                    $"削除前の確認に失敗しました（{exception.GetType().Name}: {exception.Message}）");
+                RecordAll(outcomes, file, DeleteResultStatus.TransientError, Loc(
+                    en: $"The pre-delete check failed ({exception.GetType().Name}: {exception.Message})",
+                    ja: $"削除前の確認に失敗しました（{exception.GetType().Name}: {exception.Message}）"));
                 continue;
             }
 
@@ -82,8 +85,9 @@ internal sealed class VersionDeletionRunner(
             // guard so far validated the wrong item.
             if (!IsSameFile(file.File, current.File))
             {
-                RecordAll(outcomes, file, DeleteResultStatus.PermanentError,
-                    "走査時とは別のファイルがこの位置にあります。再度スキャンしてください。");
+                RecordAll(outcomes, file, DeleteResultStatus.PermanentError, Loc(
+                    en: "A different file now sits at that location. Scan again.",
+                    ja: "走査時とは別のファイルがこの位置にあります。再度スキャンしてください。"));
                 continue;
             }
 
@@ -130,12 +134,16 @@ internal sealed class VersionDeletionRunner(
                             ? new DeleteResult
                             {
                                 Status = DeleteResultStatus.NotDeletable,
-                                Error = "削除直前の確認で、現行バージョンになっていました。",
+                                Error = Loc(
+                                    en: "The last check found it had become the current version.",
+                                    ja: "削除直前の確認で、現行バージョンになっていました。"),
                             }
                             : new DeleteResult
                             {
                                 Status = DeleteResultStatus.AlreadyDeleted,
-                                Error = "削除直前の確認で、既に存在しませんでした。",
+                                Error = Loc(
+                                    en: "The last check found it was already gone.",
+                                    ja: "削除直前の確認で、既に存在しませんでした。"),
                             }));
                     continue;
                 }
@@ -164,8 +172,9 @@ internal sealed class VersionDeletionRunner(
                         Error = $"{exception.GetType().Name}: {exception.Message}",
                     }));
                     attemptedAnything = true;
-                    abortReason =
-                        $"処理を継続できませんでした（{exception.GetType().Name}: {exception.Message}）。";
+                    abortReason = Loc(
+                        en: $"The run could not continue ({exception.GetType().Name}: {exception.Message}).",
+                        ja: $"処理を継続できませんでした（{exception.GetType().Name}: {exception.Message}）。");
                     break;
                 }
 
@@ -180,9 +189,12 @@ internal sealed class VersionDeletionRunner(
 
                 if (!verification.LocalFile.IsSafe)
                 {
-                    abortReason =
-                        $"ローカルファイルの状態が変化しました（{verification.File.LocalPath}: " +
-                        $"{DescribeLocalChange(verification.LocalFile.Change)}）。安全のため中止しました。";
+                    abortReason = Loc(
+                        en: $"The local file changed ({verification.File.LocalPath}: " +
+                            $"{DescribeLocalChange(verification.LocalFile.Change)}). " +
+                            "Stopped as a precaution.",
+                        ja: $"ローカルファイルの状態が変化しました（{verification.File.LocalPath}: " +
+                            $"{DescribeLocalChange(verification.LocalFile.Change)}）。安全のため中止しました。");
                 }
             }
 
@@ -208,12 +220,19 @@ internal sealed class VersionDeletionRunner(
 
     internal static string DescribeLocalChange(LocalFileChange change) => change switch
     {
-        LocalFileChange.Disappeared => "ローカルから消えています",
-        LocalFileChange.TimestampChanged => "更新日時が変化しました",
-        LocalFileChange.LengthChanged => "サイズが変化しました",
-        LocalFileChange.CheckFailed => "ローカルを読み取れず確認できませんでした",
-        LocalFileChange.NotChecked => "ローカルに実体がなく確認対象外です",
-        _ => "変化なし",
+        LocalFileChange.Disappeared =>
+            Loc(en: "gone from the local folder", ja: "ローカルから消えています"),
+        LocalFileChange.TimestampChanged =>
+            Loc(en: "its timestamp changed", ja: "更新日時が変化しました"),
+        LocalFileChange.LengthChanged =>
+            Loc(en: "its size changed", ja: "サイズが変化しました"),
+        LocalFileChange.CheckFailed =>
+            Loc(en: "the local copy could not be read, so nothing was verified",
+                ja: "ローカルを読み取れず確認できませんでした"),
+        LocalFileChange.NotChecked =>
+            Loc(en: "no local copy exists, so there was nothing to verify",
+                ja: "ローカルに実体がなく確認対象外です"),
+        _ => Loc(en: "unchanged", ja: "変化なし"),
     };
 
     /// <summary>

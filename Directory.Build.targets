@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+    The WebView2 package references both desktop UI assemblies. This solution is WinForms-only,
+    and leaving the WPF one in place makes every project that reaches WebView2 transitively —
+    the app and its test project — resolve two different WindowsBase versions (MSB3277).
+  -->
+  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
+
+</Project>

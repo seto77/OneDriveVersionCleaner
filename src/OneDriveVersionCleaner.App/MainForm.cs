@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using OneDriveVersionCleaner.App.Localization;
 using OneDriveVersionCleaner.Core.Aggregation;
 using OneDriveVersionCleaner.Core.Auditing;
 using OneDriveVersionCleaner.Core.Caching;
@@ -12,6 +13,7 @@ using OneDriveVersionCleaner.Core.Paths;
 using OneDriveVersionCleaner.Core.Retention;
 using OneDriveVersionCleaner.Core.Scanning;
 using OneDriveVersionCleaner.Infrastructure.OneDriveAccounts;
+using static OneDriveVersionCleaner.App.Localization.Localization;
 
 namespace OneDriveVersionCleaner.App;
 
@@ -31,7 +33,7 @@ internal sealed partial class MainForm : Form
     private const int PreferredSplitterDistance = 440;
 
     private readonly AppSettings _settings;
-    private readonly string? _settingsWarning;
+    private readonly string? _settingsReadFailure;
     private readonly OneDriveBusinessAccountDiscovery _accountDiscovery = new();
     private readonly VersionCacheStore _versionCache = new();
 
@@ -47,8 +49,16 @@ internal sealed partial class MainForm : Form
     private string? _libraryRoot;
     private bool _isBusy;
 
+    /// <summary>Set when the window was closed during an operation; the close resumes after it.</summary>
+    private bool _closeWhenIdle;
+
     /// <summary>Rebuilding the grid raises SelectionChanged once per row; ignore those.</summary>
     private bool _rebuildingVersionsGrid;
+
+    /// <summary>What the versions heading says, before it is put into words.</summary>
+    private sealed record VersionsHeader(int RowCount, long TotalBytes, int? DisplayedCount);
+
+    private VersionsHeader? _versionsHeader;
 
     private sealed record VersionRow(
         FileEntry File,
@@ -68,16 +78,18 @@ internal sealed partial class MainForm : Form
         InitializeComponent();
     }
 
-    public MainForm(AppSettings settings, string? settingsWarning)
+    public MainForm(AppSettings settings, string? settingsReadFailure)
     {
         _settings = settings;
-        _settingsWarning = settingsWarning;
+        _settingsReadFailure = settingsReadFailure;
 
         InitializeComponent();
         InitializeGridSchema();
+        ApplyUiFont();
+        ApplyLocalizedText();
         ApplySettings();
         WireRuntimeEvents();
-        RefreshDeleteState();
+        RefreshDerivedText();
     }
 
     /// <summary>
@@ -159,20 +171,50 @@ internal sealed partial class MainForm : Form
         ApplySplitterLayout();
         base.OnShown(eventArgs);
 
-        if (!string.IsNullOrWhiteSpace(_settingsWarning))
+        if (!string.IsNullOrWhiteSpace(_settingsReadFailure))
         {
             MessageBox.Show(
                 this,
-                _settingsWarning,
-                "設定の警告",
+                Loc(en: "appsettings.json could not be read, so the built-in defaults are in use.",
+                    ja: "appsettings.json を読み込めなかったため、既定値で動作しています。") +
+                $"\n{_settingsReadFailure}",
+                Loc(en: "Settings", ja: "設定の警告"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
     }
 
+    /// <summary>
+    /// Refuses to close while an operation is running, and closes itself once that operation has
+    /// finished instead.
+    /// </summary>
+    /// <remarks>
+    /// A recycle request is deliberately not cancellable: it is sent with
+    /// <see cref="CancellationToken.None"/> so that stopping never abandons a request already in
+    /// flight (FR-DELETE-009). Disposing the session here would tear the browser out from under
+    /// exactly that request, leaving the run with no idea whether SharePoint carried it out, and
+    /// no audit line for it. So the close waits for the same thing the stop button waits for.
+    /// </remarks>
     protected override void OnFormClosing(FormClosingEventArgs eventArgs)
     {
         base.OnFormClosing(eventArgs);
+        if (eventArgs.Cancel)
+        {
+            return;
+        }
+
+        if (_isBusy)
+        {
+            eventArgs.Cancel = true;
+            if (!_closeWhenIdle)
+            {
+                _closeWhenIdle = true;
+                RequestStop();
+            }
+
+            return;
+        }
+
         _operationCancellation?.Cancel();
         _sharePointSession?.Dispose();
     }
@@ -297,8 +339,8 @@ internal sealed partial class MainForm : Form
 
             MessageBox.Show(
                 this,
-                $"ローカルに見つかりませんでした。\n{localPath}",
-                "フォルダーを開く",
+                Loc(en: "Not found locally.", ja: "ローカルに見つかりませんでした。") + $"\n{localPath}",
+                Loc(en: "Open folder", ja: "フォルダーを開く"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
@@ -308,7 +350,7 @@ internal sealed partial class MainForm : Form
             MessageBox.Show(
                 this,
                 exception.Message,
-                "フォルダーを開けませんでした",
+                Loc(en: "The folder could not be opened", ja: "フォルダーを開けませんでした"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
@@ -334,7 +376,7 @@ internal sealed partial class MainForm : Form
             MessageBox.Show(
                 this,
                 exception.Message,
-                "Webで開けませんでした",
+                Loc(en: "The page could not be opened", ja: "Webで開けませんでした"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
@@ -368,8 +410,9 @@ internal sealed partial class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                "OneDrive for Businessアカウントを検出できていません。「再検出」を押してください。",
-                "接続テスト",
+                Loc(en: "No OneDrive for Business account has been detected. Press “Rescan”.",
+                    ja: "OneDrive for Businessアカウントを検出できていません。「再検出」を押してください。"),
+                Loc(en: "Connection test", ja: "接続テスト"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return;
@@ -377,58 +420,80 @@ internal sealed partial class MainForm : Form
 
         using var cancellation = new CancellationTokenSource();
         _operationCancellation = cancellation;
-        SetBusy(true, "接続テストを実行しています... (1要求)");
+        SetBusy(true, Loc(
+            en: "Running the connection test... (1 request)",
+            ja: "接続テストを実行しています... (1要求)"));
         try
         {
             var session = GetOrCreateSharePointSession(_detectedAccount);
             session.ResetThrottleState();
             if (!session.IsVerified && session.ShowDialog(this) != DialogResult.OK)
             {
-                _statusLabel.Text = "接続テストを中止しました。";
+                _statusLabel.Text = Loc(
+                    en: "The connection test was cancelled.",
+                    ja: "接続テストを中止しました。");
                 return;
             }
 
             var stopwatch = Stopwatch.StartNew();
             var site = await session.VerifyAsync(cancellation.Token);
             stopwatch.Stop();
+            RefreshAccountLabel();
 
-            _statusLabel.Text =
-                $"接続テスト成功: {site.Title}（{stopwatch.ElapsedMilliseconds:N0} ミリ秒 / " +
-                $"待機 {session.ThrottleEventCount:N0}回）";
+            _statusLabel.Text = Loc(
+                en: $"Connection test succeeded: {site.Title} " +
+                    $"({stopwatch.ElapsedMilliseconds:N0} ms / " +
+                    $"{session.ThrottleEventCount:N0} waits)",
+                ja: $"接続テスト成功: {site.Title}（{stopwatch.ElapsedMilliseconds:N0} ミリ秒 / " +
+                    $"待機 {session.ThrottleEventCount:N0}回）");
             MessageBox.Show(
                 this,
                 session.ThrottleEventCount == 0
-                    ? "要求は制限なしで通りました。走査を始められます。\n" +
-                      "まずは小さいサブフォルダーから試してください。"
-                    : $"要求は通りましたが、{session.ThrottleEventCount:N0}回の待機が入りました。\n" +
-                      "まだ制限が残っています。もう少し時間をおいてください。",
-                "接続テスト",
+                    ? Loc(en: "The request went through without being throttled. You can start " +
+                              "scanning.\nBegin with a small subfolder.",
+                          ja: "要求は制限なしで通りました。走査を始められます。\n" +
+                              "まずは小さいサブフォルダーから試してください。")
+                    : Loc(en: $"The request went through, but it waited " +
+                              $"{session.ThrottleEventCount:N0} times.\n" +
+                              "Throttling is still in effect. Give it a little longer.",
+                          ja: $"要求は通りましたが、{session.ThrottleEventCount:N0}回の待機が入りました。\n" +
+                              "まだ制限が残っています。もう少し時間をおいてください。"),
+                Loc(en: "Connection test", ja: "接続テスト"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
         catch (SharePointThrottledException)
         {
-            _statusLabel.Text = "接続テスト: まだ制限中です。";
+            _statusLabel.Text = Loc(
+                en: "Connection test: still throttled.",
+                ja: "接続テスト: まだ制限中です。");
             MessageBox.Show(
                 this,
-                "まだ SharePoint の要求制限が続いています。\n\n" +
-                "待ち時間を倍にして、あらためて試してください（1時間 → 2時間 → 4時間）。\n" +
-                "この間、走査は実行しないでください。試行を重ねると制限が延びます。",
-                "接続テスト",
+                Loc(en: "SharePoint is still throttling requests.\n\n" +
+                        "Double the wait and try again (1 hour → 2 hours → 4 hours).\n" +
+                        "Do not scan in the meantime: repeated attempts extend the throttling.",
+                    ja: "まだ SharePoint の要求制限が続いています。\n\n" +
+                        "待ち時間を倍にして、あらためて試してください（1時間 → 2時間 → 4時間）。\n" +
+                        "この間、走査は実行しないでください。試行を重ねると制限が延びます。"),
+                Loc(en: "Connection test", ja: "接続テスト"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
         catch (OperationCanceledException)
         {
-            _statusLabel.Text = "接続テストを停止しました。";
+            _statusLabel.Text = Loc(
+                en: "The connection test was stopped.",
+                ja: "接続テストを停止しました。");
         }
         catch (Exception exception)
         {
-            _statusLabel.Text = "接続テストに失敗しました。";
+            _statusLabel.Text = Loc(
+                en: "The connection test failed.",
+                ja: "接続テストに失敗しました。");
             MessageBox.Show(
                 this,
                 exception.Message,
-                "接続テスト",
+                Loc(en: "Connection test", ja: "接続テスト"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
@@ -451,7 +516,9 @@ internal sealed partial class MainForm : Form
         {
             var account = ValidateScanInputs();
             _operationCancellation = cancellation;
-            SetBusy(true, "本人のOneDriveサイトを開いています...");
+            SetBusy(true, Loc(
+                en: "Opening your own OneDrive site...",
+                ja: "本人のOneDriveサイトを開いています..."));
 
             var stopwatch = Stopwatch.StartNew();
             var session = GetOrCreateSharePointSession(account);
@@ -465,7 +532,9 @@ internal sealed partial class MainForm : Form
                         _sharePointSession = null;
                     }
 
-                    throw new OperationCanceledException("Microsoft 365へのサインインを中止しました。");
+                    throw new OperationCanceledException(Loc(
+                        en: "The Microsoft 365 sign-in was cancelled.",
+                        ja: "Microsoft 365へのサインインを中止しました。"));
                 }
             }
             else
@@ -473,9 +542,10 @@ internal sealed partial class MainForm : Form
                 await session.VerifyAsync(cancellation.Token);
             }
 
-            _accountLabel.Text =
-                $"検出済み: {account.DisplayName} ({account.AccountKey}) / 本人セッション確認済み";
-            _statusLabel.Text = "OneDriveのドキュメントルートを確認しています...";
+            RefreshAccountLabel();
+            _statusLabel.Text = Loc(
+                en: "Checking the OneDrive document root...",
+                ja: "OneDriveのドキュメントルートを確認しています...");
             var library = await session.GetDefaultDocumentLibraryRootAsync(cancellation.Token);
             var libraryRoot = library.Path;
 
@@ -483,12 +553,16 @@ internal sealed partial class MainForm : Form
             session.ResetThrottleState();
             if (!versioning.EnableVersioning)
             {
-                _statusLabel.Text = "このライブラリはバージョン管理が無効です。";
+                _statusLabel.Text = Loc(
+                    en: "Versioning is turned off for this library.",
+                    ja: "このライブラリはバージョン管理が無効です。");
                 MessageBox.Show(
                     this,
-                    "このドキュメントライブラリはバージョン管理が無効です。\n" +
-                    "過去バージョンは存在しないため、走査は行いません。",
-                    "バージョン管理",
+                    Loc(en: "Versioning is turned off for this document library.\n" +
+                            "There are no past versions, so nothing is scanned.",
+                        ja: "このドキュメントライブラリはバージョン管理が無効です。\n" +
+                            "過去バージョンは存在しないため、走査は行いません。"),
+                    Loc(en: "Versioning", ja: "バージョン管理"),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
                 return;
@@ -499,9 +573,11 @@ internal sealed partial class MainForm : Form
             // that cannot be worth a request. Run off the UI thread so a large sync folder
             // does not freeze the form while it is counted.
             var thresholdBytes = CreatePolicy().MinimumCurrentFileBytes;
-            var surveyProgress = new Progress<LocalSurveyProgress>(report => _statusLabel.Text =
-                $"ローカルを検索しています... 検査 {report.FilesExamined:N0}件 / " +
-                $"{ByteSizeFormatter.Format(thresholdBytes)}以上 {report.CandidatesFound:N0}件");
+            var surveyProgress = new Progress<LocalSurveyProgress>(report => _statusLabel.Text = Loc(
+                en: $"Walking the local folder... {report.FilesExamined:N0} examined / " +
+                    $"{report.CandidatesFound:N0} of {SizeText.Of(thresholdBytes)} or more",
+                ja: $"ローカルを検索しています... 検査 {report.FilesExamined:N0}件 / " +
+                    $"{SizeText.Of(thresholdBytes)}以上 {report.CandidatesFound:N0}件"));
             var survey = await Task.Run(
                 () => LocalFileSurvey.Run(
                     account.UserFolder,
@@ -511,11 +587,11 @@ internal sealed partial class MainForm : Form
                     cancellation.Token),
                 cancellation.Token);
 
-            var progress = new Progress<ScanProgress>(report => _statusLabel.Text =
-                $"バージョン履歴を取得しています... {report.Completed:N0}/{report.Total:N0}件");
+            var progress = new Progress<ScanProgress>(report => _statusLabel.Text = Loc(
+                en: $"Reading version history... {report.Completed:N0}/{report.Total:N0}",
+                ja: $"バージョン履歴を取得しています... {report.Completed:N0}/{report.Total:N0}件"));
 
-            void OnThrottleWait(object? _, TimeSpan wait) => _statusLabel.Text =
-                $"SharePointの要求制限により あと {wait.TotalSeconds:N0} 秒待機しています...";
+            void OnThrottleWait(object? _, TimeSpan wait) => _statusLabel.Text = ThrottleWaitText(wait);
             session.ThrottleWaitStarted += OnThrottleWait;
             ScanResult scanned;
             try
@@ -550,12 +626,20 @@ internal sealed partial class MainForm : Form
 
             var reuse = scanned.ReusedFromCacheCount == 0
                 ? ""
-                : $" / 前回結果を再利用 {scanned.ReusedFromCacheCount:N0}件";
-            _statusLabel.Text =
-                $"取得完了: {_files.Count:N0}ファイル / 過去版 {_files.Sum(file => file.PreviousVersionCount):N0}件 / " +
-                $"ローカル検査 {survey.FilesExamined:N0}件 → 対象 {survey.Candidates.Count:N0}件 / " +
-                $"問い合わせ {scanned.QueriedFileCount:N0}件{reuse}" +
-                $"（{stopwatch.Elapsed.TotalSeconds:N1}秒）";
+                : Loc(en: $" / {scanned.ReusedFromCacheCount:N0} reused from the last read",
+                      ja: $" / 前回結果を再利用 {scanned.ReusedFromCacheCount:N0}件");
+            _statusLabel.Text = Loc(
+                en: $"Done: {_files.Count:N0} files / " +
+                    $"{_files.Sum(file => file.PreviousVersionCount):N0} past versions / " +
+                    $"{survey.FilesExamined:N0} examined locally → {survey.Candidates.Count:N0} selected / " +
+                    $"{scanned.QueriedFileCount:N0} queried",
+                ja: $"取得完了: {_files.Count:N0}ファイル / " +
+                    $"過去版 {_files.Sum(file => file.PreviousVersionCount):N0}件 / " +
+                    $"ローカル検査 {survey.FilesExamined:N0}件 → 対象 {survey.Candidates.Count:N0}件 / " +
+                    $"問い合わせ {scanned.QueriedFileCount:N0}件") +
+                reuse +
+                Loc(en: $" ({stopwatch.Elapsed.TotalSeconds:N1} s)",
+                    ja: $"（{stopwatch.Elapsed.TotalSeconds:N1}秒）");
 
             // Folders the walk could not read and files the service would not answer for leave
             // gaps in the same result, so they are reported together.
@@ -563,29 +647,35 @@ internal sealed partial class MainForm : Form
         }
         catch (OperationCanceledException)
         {
-            _statusLabel.Text = "処理を停止しました。";
+            _statusLabel.Text = Loc(en: "Stopped.", ja: "処理を停止しました。");
         }
         catch (SharePointThrottledException exception)
         {
-            _statusLabel.Text = "SharePointの要求制限により中断しました。";
+            _statusLabel.Text = Loc(
+                en: "Interrupted by SharePoint throttling.",
+                ja: "SharePointの要求制限により中断しました。");
             MessageBox.Show(
                 this,
                 $"{exception.Message}\n\n" +
-                "対処:\n" +
-                "・数分から数十分おいてから再実行してください\n" +
-                "・同期ルート全体ではなく、サブフォルダーに分けて実行してください\n" +
-                "・他のOneDrive操作（大量同期など）が動いていないか確認してください",
-                "SharePointの要求制限",
+                Loc(en: "What to do:\n" +
+                        "• Wait some minutes to some tens of minutes, then run it again\n" +
+                        "• Run one subfolder at a time instead of the whole sync root\n" +
+                        "• Check that no other OneDrive activity (a large sync, say) is running",
+                    ja: "対処:\n" +
+                        "・数分から数十分おいてから再実行してください\n" +
+                        "・同期ルート全体ではなく、サブフォルダーに分けて実行してください\n" +
+                        "・他のOneDrive操作（大量同期など）が動いていないか確認してください"),
+                Loc(en: "SharePoint throttling", ja: "SharePointの要求制限"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
         catch (Exception exception)
         {
-            _statusLabel.Text = "取得に失敗しました。";
+            _statusLabel.Text = Loc(en: "The read failed.", ja: "取得に失敗しました。");
             MessageBox.Show(
                 this,
                 exception.Message,
-                "取得エラー",
+                Loc(en: "Read error", ja: "取得エラー"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
@@ -608,8 +698,9 @@ internal sealed partial class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                "先に「Webでサインインして全履歴を取得」を実行してください。",
-                "ごみ箱へ移動",
+                Loc(en: "Press “Read history” and sign in first.",
+                    ja: "先に「履歴を取得」でサインインしてください。"),
+                Loc(en: "Move to recycle bin", ja: "ごみ箱へ移動"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return;
@@ -621,8 +712,10 @@ internal sealed partial class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                "移動する過去バージョンを表から選択してください。ShiftまたはCtrlで複数選択できます。",
-                "ごみ箱へ移動",
+                Loc(en: "Select the past versions to move in the upper grid. " +
+                        "Shift or Ctrl selects several.",
+                    ja: "移動する過去バージョンを表から選択してください。ShiftまたはCtrlで複数選択できます。"),
+                Loc(en: "Move to recycle bin", ja: "ごみ箱へ移動"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             return;
@@ -638,8 +731,10 @@ internal sealed partial class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                $"移動計画を作成できませんでした。処理を中止します。\n{exception.Message}",
-                "移動計画",
+                Loc(en: "The move could not be planned, so nothing was done.",
+                    ja: "移動計画を作成できませんでした。処理を中止します。") +
+                $"\n{exception.Message}",
+                Loc(en: "Move plan", ja: "移動計画"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
             return;
@@ -656,24 +751,30 @@ internal sealed partial class MainForm : Form
         {
             if (confirmation.ShowDialog(this) != DialogResult.OK)
             {
-                _statusLabel.Text = "ごみ箱への移動を中止しました。";
+                _statusLabel.Text = Loc(
+                    en: "The move to the recycle bin was cancelled.",
+                    ja: "ごみ箱への移動を中止しました。");
                 return;
             }
         }
 
         using var cancellation = new CancellationTokenSource();
         _operationCancellation = cancellation;
-        SetBusy(true, $"ごみ箱へ移動しています... (0/{plan.VersionCount:N0})");
+        SetBusy(true, Loc(
+            en: $"Moving to the recycle bin... (0/{plan.VersionCount:N0})",
+            ja: $"ごみ箱へ移動しています... (0/{plan.VersionCount:N0})"));
         try
         {
             var progress = new Progress<VersionDeletionProgress>(report =>
                 _statusLabel.Text = string.IsNullOrEmpty(report.CloudPath)
-                    ? $"結果を確認しています... ({report.CompletedCount:N0}/{report.TotalCount:N0})"
-                    : $"移動しています ({report.CompletedCount + 1:N0}/{report.TotalCount:N0}): " +
-                      $"{report.CloudPath} {report.VersionLabel}");
+                    ? Loc(en: $"Checking the outcome... ({report.CompletedCount:N0}/{report.TotalCount:N0})",
+                          ja: $"結果を確認しています... ({report.CompletedCount:N0}/{report.TotalCount:N0})")
+                    : Loc(en: $"Moving ({report.CompletedCount + 1:N0}/{report.TotalCount:N0}): " +
+                              $"{report.CloudPath} {report.VersionLabel}",
+                          ja: $"移動しています ({report.CompletedCount + 1:N0}/{report.TotalCount:N0}): " +
+                              $"{report.CloudPath} {report.VersionLabel}"));
 
-            void OnThrottleWait(object? _, TimeSpan wait) => _statusLabel.Text =
-                $"SharePointの要求制限により あと {wait.TotalSeconds:N0} 秒待機しています...";
+            void OnThrottleWait(object? _, TimeSpan wait) => _statusLabel.Text = ThrottleWaitText(wait);
             session.ResetThrottleState();
             session.ThrottleWaitStarted += OnThrottleWait;
             VersionDeletionRunOutput output;
@@ -689,21 +790,28 @@ internal sealed partial class MainForm : Form
                 session.ThrottleWaitStarted -= OnThrottleWait;
             }
 
-            await ApplyDeletionResultAsync(output.RefreshedFiles);
+            // The record of what was recycled is written before anything else is touched.
+            // Refreshing the grid and the cache is presentation; an exception in there must not
+            // be able to take the only account of what happened with it.
             var logPath = await WriteDeletionLogAsync(policy, output.Result);
+            await ApplyDeletionResultAsync(output.RefreshedFiles);
             ReportDeletionResult(output.Result, logPath);
         }
         catch (OperationCanceledException)
         {
-            _statusLabel.Text = "ごみ箱への移動を停止しました。";
+            _statusLabel.Text = Loc(
+                en: "The move to the recycle bin was stopped.",
+                ja: "ごみ箱への移動を停止しました。");
         }
         catch (Exception exception)
         {
-            _statusLabel.Text = "ごみ箱への移動に失敗しました。";
+            _statusLabel.Text = Loc(
+                en: "The move to the recycle bin failed.",
+                ja: "ごみ箱への移動に失敗しました。");
             MessageBox.Show(
                 this,
                 exception.Message,
-                "移動エラー",
+                Loc(en: "Move error", ja: "移動エラー"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
         }
@@ -788,9 +896,16 @@ internal sealed partial class MainForm : Form
         catch (Exception exception) when (exception is IOException or
             UnauthorizedAccessException or JsonException or ArgumentException or NotSupportedException)
         {
-            _statusLabel.Text += " / 取得結果を保存できませんでした";
+            _statusLabel.Text += Loc(
+                en: " / the result could not be stored",
+                ja: " / 取得結果を保存できませんでした");
         }
     }
+
+    /// <summary>Shared by the scan and the move, which both count the same cooldown down.</summary>
+    private static string ThrottleWaitText(TimeSpan wait) => Loc(
+        en: $"SharePoint is throttling: waiting another {wait.TotalSeconds:N0} s...",
+        ja: $"SharePointの要求制限により あと {wait.TotalSeconds:N0} 秒待機しています...");
 
     /// <summary>
     /// The version requests are the expensive part, and they are what got the tenant throttled
@@ -804,16 +919,24 @@ internal sealed partial class MainForm : Form
             return true;
         }
 
+        var requestCount = fileCount * SharePointWebSession.RequestsPerVersionRead;
         return MessageBox.Show(
             this,
-            $"{ByteSizeFormatter.Format(thresholdBytes)} 以上のファイルが {fileCount:N0} 件あり、" +
-            "前回の結果では答えられません。\n" +
-            "これらのバージョン一覧を1ファイルずつ取得します" +
-            $"（およそ {fileCount * SharePointWebSession.RequestsPerVersionRead:N0} 回の要求）。\n\n" +
-            "件数が多いと SharePoint の要求制限にかかります。\n" +
-            "中止して「処理する最小ファイルサイズ」を大きくすると、件数を絞れます。\n\n" +
-            "このまま続けますか。",
-            "取得件数の確認",
+            Loc(en: $"{fileCount:N0} files of {SizeText.Of(thresholdBytes)} or more " +
+                    "cannot be answered from the last read.\n" +
+                    "Their version lists will be fetched one file at a time " +
+                    $"(about {requestCount:N0} requests).\n\n" +
+                    "A large number of these runs into SharePoint throttling.\n" +
+                    "Cancelling and raising “File size” narrows it down.\n\n" +
+                    "Continue?",
+                ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが {fileCount:N0} 件あり、" +
+                    "前回の結果では答えられません。\n" +
+                    "これらのバージョン一覧を1ファイルずつ取得します" +
+                    $"（およそ {requestCount:N0} 回の要求）。\n\n" +
+                    "件数が多いと SharePoint の要求制限にかかります。\n" +
+                    "中止して「ファイルサイズが」を大きくすると、件数を絞れます。\n\n" +
+                    "このまま続けますか。"),
+            Loc(en: "Confirm the number of requests", ja: "取得件数の確認"),
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning) == DialogResult.Yes;
     }
@@ -830,12 +953,15 @@ internal sealed partial class MainForm : Form
             return;
         }
 
-        _statusLabel.Text += $" / 読み取れなかった項目 {errors.Count:N0}件";
+        _statusLabel.Text += Loc(
+            en: $" / {errors.Count:N0} items unreadable",
+            ja: $" / 読み取れなかった項目 {errors.Count:N0}件");
         MessageBox.Show(
             this,
-            $"{errors.Count:N0}件を読み取れませんでした。それらは集計に含まれていません。\n\n" +
-            string.Join("\n", errors.Take(10)),
-            "一部を取得できませんでした",
+            Loc(en: $"{errors.Count:N0} items could not be read. They are not in the totals.",
+                ja: $"{errors.Count:N0}件を読み取れませんでした。それらは集計に含まれていません。") +
+            "\n\n" + string.Join("\n", errors.Take(10)),
+            Loc(en: "Some items could not be read", ja: "一部を取得できませんでした"),
             MessageBoxButtons.OK,
             MessageBoxIcon.Warning);
     }
@@ -888,8 +1014,10 @@ internal sealed partial class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                $"移動は実行しましたが、ログを書き出せませんでした。\n{exception.Message}",
-                "移動ログ",
+                Loc(en: "The move ran, but the log could not be written.",
+                    ja: "移動は実行しましたが、ログを書き出せませんでした。") +
+                $"\n{exception.Message}",
+                Loc(en: "Move log", ja: "移動ログ"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return null;
@@ -900,74 +1028,92 @@ internal sealed partial class MainForm : Form
     {
         var unknownSuffix = result.UnknownReclaimedSizeCount == 0
             ? ""
-            : $"（サイズ不明 {result.UnknownReclaimedSizeCount:N0}件を除く）";
+            : Loc(en: $" (excluding {result.UnknownReclaimedSizeCount:N0} of unknown size)",
+                  ja: $"（サイズ不明 {result.UnknownReclaimedSizeCount:N0}件を除く）");
 
         var message = new StringBuilder()
-            .AppendLine($"ごみ箱へ移動: {result.DeletedCount:N0}件 / 既に削除済み: {result.AlreadyDeletedCount:N0}件")
-            .AppendLine($"失敗: {result.FailureCount:N0}件")
-            .AppendLine(
-                $"削減見込み: {ByteSizeFormatter.Format(result.KnownReclaimedBytes)}{unknownSuffix}");
+            .AppendLine(Loc(
+                en: $"Moved to the recycle bin: {result.DeletedCount:N0} / " +
+                    $"already gone: {result.AlreadyDeletedCount:N0}",
+                ja: $"ごみ箱へ移動: {result.DeletedCount:N0}件 / 既に削除済み: {result.AlreadyDeletedCount:N0}件"))
+            .AppendLine(Loc(en: $"Failed: {result.FailureCount:N0}", ja: $"失敗: {result.FailureCount:N0}件"))
+            .AppendLine(Loc(
+                en: $"Space expected back: {SizeText.Of(result.KnownReclaimedBytes)}",
+                ja: $"削減見込み: {SizeText.Of(result.KnownReclaimedBytes)}") + unknownSuffix);
 
         if (result.NotAttemptedCount > 0)
         {
-            message.AppendLine($"未実行: {result.NotAttemptedCount:N0}件");
+            message.AppendLine(Loc(
+                en: $"Not attempted: {result.NotAttemptedCount:N0}",
+                ja: $"未実行: {result.NotAttemptedCount:N0}件"));
         }
 
         if (result.AbortReason is not null)
         {
-            message.AppendLine().AppendLine($"中止: {result.AbortReason}");
+            message.AppendLine().AppendLine(
+                Loc(en: "Aborted", ja: "中止") + $": {result.AbortReason}");
         }
 
-        message.AppendLine().AppendLine("ローカルの現行ファイル確認:");
+        message.AppendLine().AppendLine(Loc(
+            en: "Local current files, checked:",
+            ja: "ローカルの現行ファイル確認:"));
         foreach (var verification in result.Verifications)
         {
             var remaining = verification.RemainingPreviousVersionCount.HasValue
-                ? $"{verification.RemainingPreviousVersionCount.Value:N0}件"
-                : "確認できません";
+                ? Loc(en: $"{verification.RemainingPreviousVersionCount.Value:N0}",
+                      ja: $"{verification.RemainingPreviousVersionCount.Value:N0}件")
+                : Loc(en: "could not be checked", ja: "確認できません");
             message.AppendLine(
                 $"　{verification.File.Name}: " +
                 $"{VersionDeletionRunner.DescribeLocalChange(verification.LocalFile.Change)} / " +
-                $"残り過去版 {remaining}");
+                Loc(en: $"past versions left: {remaining}", ja: $"残り過去版 {remaining}"));
             if (verification.UnexpectedlyPresentVersionIds.Count > 0)
             {
                 message.AppendLine(
-                    "　　移動したはずのバージョンが残っています: " +
+                    "　　" +
+                    Loc(en: "versions that should have moved are still there: ",
+                        ja: "移動したはずのバージョンが残っています: ") +
                     string.Join(", ", verification.UnexpectedlyPresentVersionIds));
             }
 
             if (verification.Error is not null)
             {
-                message.AppendLine($"　　再確認エラー: {verification.Error}");
+                message.AppendLine(
+                    "　　" + Loc(en: "re-check error", ja: "再確認エラー") + $": {verification.Error}");
             }
         }
 
         var failures = result.Outcomes.Where(outcome => !outcome.IsSuccess).Take(10).ToArray();
         if (failures.Length > 0)
         {
-            message.AppendLine().AppendLine("失敗の内訳:");
+            message.AppendLine().AppendLine(Loc(en: "Failures:", ja: "失敗の内訳:"));
             foreach (var failure in failures)
             {
                 message.AppendLine(
                     $"　{failure.File.Name} {failure.Version.Label ?? failure.Version.VersionId}: " +
-                    $"{failure.Result.Status} {failure.Result.Error}");
+                    $"{DisplayNames.Of(failure.Result.Status)} {failure.Result.Error}");
             }
         }
 
         if (logPath is not null)
         {
-            message.AppendLine().AppendLine($"ログ: {logPath}");
+            message.AppendLine().AppendLine(Loc(en: "Log", ja: "ログ") + $": {logPath}");
         }
 
         var hasProblem = result.FailureCount > 0 ||
             result.AbortReason is not null ||
             result.Verifications.Any(verification => !verification.IsVerified);
-        _statusLabel.Text =
-            $"ごみ箱へ移動: 成功 {result.DeletedCount:N0}件 / 失敗 {result.FailureCount:N0}件" +
-            (result.WasStopped ? "（停止しました）" : "");
+        _statusLabel.Text = Loc(
+                en: $"Moved to the recycle bin: {result.DeletedCount:N0} succeeded / " +
+                    $"{result.FailureCount:N0} failed",
+                ja: $"ごみ箱へ移動: 成功 {result.DeletedCount:N0}件 / 失敗 {result.FailureCount:N0}件") +
+            (result.WasStopped ? Loc(en: " (stopped)", ja: "（停止しました）") : "");
         MessageBox.Show(
             this,
             message.ToString(),
-            hasProblem ? "確認が必要です" : "移動結果",
+            hasProblem
+                ? Loc(en: "Needs a look", ja: "確認が必要です")
+                : Loc(en: "Move result", ja: "移動結果"),
             MessageBoxButtons.OK,
             hasProblem ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
@@ -995,11 +1141,12 @@ internal sealed partial class MainForm : Form
         try
         {
             ApplyResults(_aggregate?.Summary.ScanDuration);
-            _statusLabel.Text = "保持条件を再計算しました。";
+            _statusLabel.Text = Loc(en: "Rules reapplied.", ja: "保持条件を再計算しました。");
         }
         catch (Exception exception) when (exception is ArgumentException or OverflowException)
         {
-            _statusLabel.Text = $"保持条件エラー: {exception.Message}";
+            _statusLabel.Text =
+                Loc(en: "Rule error", ja: "保持条件エラー") + $": {exception.Message}";
         }
     }
 
@@ -1007,22 +1154,35 @@ internal sealed partial class MainForm : Form
     {
         if (_aggregate is null)
         {
-            _summaryLabel.Text = "データはまだありません。";
+            _summaryLabel.Text = Loc(en: "No data yet.", ja: "データはまだありません。");
             return;
         }
 
         var summary = _aggregate.Summary;
         var historyUnknown = summary.UnknownPreviousVersionSizeCount == 0
             ? ""
-            : $" + サイズ不明 {summary.UnknownPreviousVersionSizeCount:N0}件";
+            : Loc(en: $" + {summary.UnknownPreviousVersionSizeCount:N0} of unknown size",
+                  ja: $" + サイズ不明 {summary.UnknownPreviousVersionSizeCount:N0}件");
         var reclaimUnknown = summary.UnknownDeleteCandidateSizeCount == 0
             ? ""
-            : $" + サイズ不明 {summary.UnknownDeleteCandidateSizeCount:N0}件";
-        _summaryLabel.Text =
-            $"ファイル {summary.TargetFileCount:N0} / 履歴あり {summary.FilesWithPreviousVersions:N0} / " +
-            $"過去版 {summary.PreviousVersionCount:N0} / 履歴容量 {ByteSizeFormatter.Format(summary.KnownPreviousVersionBytes)}{historyUnknown} / " +
-            $"候補 {summary.DeleteCandidateCount:N0} / 削減見込み {ByteSizeFormatter.Format(summary.KnownReclaimableBytes)}{reclaimUnknown} / " +
-            $"エラー {summary.ErrorCount:N0}";
+            : Loc(en: $" + {summary.UnknownDeleteCandidateSizeCount:N0} of unknown size",
+                  ja: $" + サイズ不明 {summary.UnknownDeleteCandidateSizeCount:N0}件");
+        _summaryLabel.Text = Loc(
+                en: $"Files {summary.TargetFileCount:N0} / " +
+                    $"with history {summary.FilesWithPreviousVersions:N0} / " +
+                    $"past versions {summary.PreviousVersionCount:N0} / " +
+                    $"history {SizeText.Of(summary.KnownPreviousVersionBytes)}",
+                ja: $"ファイル {summary.TargetFileCount:N0} / " +
+                    $"履歴あり {summary.FilesWithPreviousVersions:N0} / " +
+                    $"過去版 {summary.PreviousVersionCount:N0} / " +
+                    $"履歴容量 {SizeText.Of(summary.KnownPreviousVersionBytes)}") +
+            historyUnknown +
+            Loc(en: $" / candidates {summary.DeleteCandidateCount:N0} / " +
+                    $"reclaimable {SizeText.Of(summary.KnownReclaimableBytes)}",
+                ja: $" / 候補 {summary.DeleteCandidateCount:N0} / " +
+                    $"削減見込み {SizeText.Of(summary.KnownReclaimableBytes)}") +
+            reclaimUnknown +
+            Loc(en: $" / errors {summary.ErrorCount:N0}", ja: $" / エラー {summary.ErrorCount:N0}");
     }
 
     private void RefreshVersionsGrid()
@@ -1034,7 +1194,8 @@ internal sealed partial class MainForm : Form
             _versionsGrid.Rows.Clear();
             if (_retention is null)
             {
-                _versionsHeaderLabel.Text = "過去バージョン";
+                _versionsHeader = null;
+                UpdateVersionsHeader();
                 return;
             }
 
@@ -1056,12 +1217,14 @@ internal sealed partial class MainForm : Form
             var totalBytes = rows
                 .Where(row => row.Version.Size is >= 0)
                 .Aggregate(0L, (total, row) => checked(total + row.Version.Size!.Value));
-            var truncated = rows.Length > displayed.Length
-                ? $" / 表示は上位{displayed.Length:N0}件"
-                : "";
-            _versionsHeaderLabel.Text =
-                $"過去バージョン {rows.Length:N0}件 / 合計 {ByteSizeFormatter.Format(totalBytes)}{truncated}" +
-                " — ShiftまたはCtrlで複数選択";
+
+            // Kept as numbers rather than as a finished sentence, so a language change can
+            // rewrite the heading without rebuilding the rows underneath it.
+            _versionsHeader = new VersionsHeader(
+                rows.Length,
+                totalBytes,
+                rows.Length > displayed.Length ? displayed.Length : null);
+            UpdateVersionsHeader();
         }
         finally
         {
@@ -1088,8 +1251,10 @@ internal sealed partial class MainForm : Form
             source.Version.ModifiedBy ?? "",
             source.Version.Size,
             source.File.KnownPreviousVersionTotalSize,
-            source.Decision?.Disposition.ToString() ?? "-",
-            source.Decision is null ? "" : string.Join(", ", source.Decision.Reasons),
+            source.Decision is null ? "-" : DisplayNames.Of(source.Decision.Disposition),
+            source.Decision is null
+                ? ""
+                : string.Join(", ", source.Decision.Reasons.Select(DisplayNames.Of)),
         ];
         row.CreateCells(_versionsGrid, values!);
         row.Tag = source;
@@ -1140,7 +1305,7 @@ internal sealed partial class MainForm : Form
             file.DeleteCandidateCount,
             file.KnownReclaimableBytes,
             file.File.LastModified?.ToLocalTime().DateTime,
-            file.File.RetrievalStatus.ToString(),
+            DisplayNames.Of(file.File.RetrievalStatus),
         ];
         row.CreateCells(_filesGrid, values!);
         row.Tag = file;
@@ -1157,8 +1322,9 @@ internal sealed partial class MainForm : Form
         var selected = _isBusy ? 0 : GetSelectedRows().Count;
         _deleteButton.Enabled = selected > 0 && _sharePointSession?.IsVerified == true;
         _deleteButton.Text = selected > 0
-            ? $"選択をごみ箱へ移動 ({selected:N0}件)"
-            : "選択をごみ箱へ移動";
+            ? Loc(en: $"Move selection to recycle bin ({selected:N0})",
+                  ja: $"選択をごみ箱へ移動 ({selected:N0}件)")
+            : Loc(en: "Move selection to recycle bin", ja: "選択をごみ箱へ移動");
     }
 
     private async void ExportButtonOnClick(object? sender, EventArgs eventArgs)
@@ -1170,7 +1336,9 @@ internal sealed partial class MainForm : Form
 
         using var dialog = new FolderBrowserDialog
         {
-            Description = "CSV と JSON の保存先を選択してください",
+            Description = Loc(
+                en: "Choose where to write the CSV and JSON",
+                ja: "CSV と JSON の保存先を選択してください"),
             UseDescriptionForTitle = true,
             ShowNewFolderButton = true,
         };
@@ -1191,8 +1359,10 @@ internal sealed partial class MainForm : Form
         {
             MessageBox.Show(
                 this,
-                $"既定の出力先が無効です。保存先を手動で選択してください。\n{exception.Message}",
-                "出力先の警告",
+                Loc(en: "The configured export directory is not usable. Choose one by hand.",
+                    ja: "既定の出力先が無効です。保存先を手動で選択してください。") +
+                $"\n{exception.Message}",
+                Loc(en: "Export directory", ja: "出力先の警告"),
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
@@ -1205,24 +1375,30 @@ internal sealed partial class MainForm : Form
         var aggregateSnapshot = _aggregate;
         using var cancellation = new CancellationTokenSource();
         _operationCancellation = cancellation;
-        SetBusy(true, "CSV / JSON を出力しています...");
+        SetBusy(true, Loc(en: "Writing the CSV and JSON...", ja: "CSV / JSON を出力しています..."));
         try
         {
             var paths = await WriteExportPairAsync(
                 dialog.SelectedPath,
                 aggregateSnapshot,
                 cancellation.Token);
-            _statusLabel.Text = $"出力しました: {paths.CsvPath} / {paths.JsonPath}";
+            _statusLabel.Text =
+                Loc(en: "Written", ja: "出力しました") + $": {paths.CsvPath} / {paths.JsonPath}";
         }
         catch (OperationCanceledException)
         {
-            _statusLabel.Text = "出力を停止しました。";
+            _statusLabel.Text = Loc(en: "The export was stopped.", ja: "出力を停止しました。");
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             ArgumentException or NotSupportedException or JsonException)
         {
-            _statusLabel.Text = "出力に失敗しました。";
-            MessageBox.Show(this, exception.Message, "出力エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _statusLabel.Text = Loc(en: "The export failed.", ja: "出力に失敗しました。");
+            MessageBox.Show(
+                this,
+                exception.Message,
+                Loc(en: "Export error", ja: "出力エラー"),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
         }
         finally
         {
@@ -1327,12 +1503,15 @@ internal sealed partial class MainForm : Form
     {
         if (!Directory.Exists(_targetBox.Text))
         {
-            throw new ArgumentException("OneDrive同期フォルダー配下のフォルダーを指定してください。");
+            throw new ArgumentException(Loc(
+                en: "Choose a folder inside the OneDrive sync folder.",
+                ja: "OneDrive同期フォルダー配下のフォルダーを指定してください。"));
         }
 
         var account = _accountDiscovery.FindByLocalPath(_targetBox.Text)
-            ?? throw new InvalidOperationException(
-                "指定フォルダーに対応するOneDrive for Businessアカウントを検出できませんでした。");
+            ?? throw new InvalidOperationException(Loc(
+                en: "No OneDrive for Business account matches that folder.",
+                ja: "指定フォルダーに対応するOneDrive for Businessアカウントを検出できませんでした。"));
         _ = LocalPathMapper.Map(account.UserFolder, _targetBox.Text);
         _rootBox.Text = account.UserFolder;
         return account;
@@ -1349,14 +1528,16 @@ internal sealed partial class MainForm : Form
         if (account is null)
         {
             _detectedAccount = null;
-            _accountLabel.Text = "OneDrive for Businessアカウントを検出できませんでした。";
+            RefreshAccountLabel();
             if (showFailure)
             {
                 MessageBox.Show(
                     this,
-                    "WindowsのOneDrive設定からBusinessアカウントを検出できませんでした。" +
-                    "OneDriveが起動して同期済みか確認してください。",
-                    "OneDrive自動検出",
+                    Loc(en: "No Business account was found in the Windows OneDrive settings. " +
+                            "Check that OneDrive is running and has finished syncing.",
+                        ja: "WindowsのOneDrive設定からBusinessアカウントを検出できませんでした。" +
+                            "OneDriveが起動して同期済みか確認してください。"),
+                    Loc(en: "OneDrive detection", ja: "OneDrive自動検出"),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
@@ -1381,15 +1562,16 @@ internal sealed partial class MainForm : Form
             _targetBox.Text = account.UserFolder;
         }
 
-        _accountLabel.Text =
-            $"自動検出: {account.DisplayName} ({account.AccountKey}) / 管理センター設定不要";
+        RefreshAccountLabel();
     }
 
     private void BrowseForTargetFolder()
     {
         using var dialog = new FolderBrowserDialog
         {
-            Description = "バージョン履歴を調べるOneDrive配下のフォルダーを選択してください",
+            Description = Loc(
+                en: "Choose the folder under OneDrive whose version history to look at",
+                ja: "バージョン履歴を調べるOneDrive配下のフォルダーを選択してください"),
             UseDescriptionForTitle = true,
             ShowNewFolderButton = false,
         };
@@ -1452,7 +1634,9 @@ internal sealed partial class MainForm : Form
 
     private void RequestStop()
     {
-        _statusLabel.Text = "停止要求を送信しました。進行中の要求の完了を待っています...";
+        _statusLabel.Text = Loc(
+            en: "Stop requested. Waiting for the requests already sent to finish...",
+            ja: "停止要求を送信しました。進行中の要求の完了を待っています...");
         _operationCancellation?.Cancel();
         _stopButton.Enabled = false;
     }
@@ -1473,11 +1657,22 @@ internal sealed partial class MainForm : Form
         _minimumFileSizeInput.Enabled = !busy;
         _cacheAgeInput.Enabled = !busy;
         _candidatesOnlyCheck.Enabled = !busy;
+
+        // Changing language mid-run would rewrite the progress line under the operation that is
+        // writing it, and re-translate results that are still being produced.
+        _languageMenu.Enabled = !busy;
         _stopButton.Enabled = busy;
         _exportButton.Enabled = !busy && _aggregate is not null;
         _progressBar.Visible = busy;
         _statusLabel.Text = status;
         RefreshDeleteState();
+
+        // The close was held back until the operation finished; finish it now. Posted rather
+        // than called, so the operation's own finally block unwinds first.
+        if (!busy && _closeWhenIdle && !IsDisposed)
+        {
+            BeginInvoke(Close);
+        }
     }
 
     private void VersionsGridOnCellFormatting(object? sender, DataGridViewCellFormattingEventArgs eventArgs)
@@ -1491,12 +1686,12 @@ internal sealed partial class MainForm : Form
         {
             case "VersionSize":
                 eventArgs.Value = _versionsGrid.Rows[eventArgs.RowIndex].Tag is VersionRow row
-                    ? ByteSizeFormatter.Format(row.Version.Size)
-                    : "不明";
+                    ? SizeText.Of(row.Version.Size)
+                    : Loc(en: "Unknown", ja: "不明");
                 eventArgs.FormattingApplied = true;
                 break;
             case "FileHistorySize" when eventArgs.Value is long historyBytes:
-                eventArgs.Value = ByteSizeFormatter.Format(historyBytes);
+                eventArgs.Value = SizeText.Of(historyBytes);
                 eventArgs.FormattingApplied = true;
                 break;
             case "Created" when eventArgs.Value is DateTime date:
@@ -1517,18 +1712,18 @@ internal sealed partial class MainForm : Form
         switch (_filesGrid.Columns[eventArgs.ColumnIndex].Name)
         {
             case "CurrentSize":
-                eventArgs.Value = ByteSizeFormatter.Format(file.CurrentSizeBytes);
+                eventArgs.Value = SizeText.Of(file.CurrentSizeBytes);
                 eventArgs.FormattingApplied = true;
                 break;
             case "HistorySize":
-                eventArgs.Value = ByteSizeFormatter.Format(file.KnownPreviousVersionBytes) +
+                eventArgs.Value = SizeText.Of(file.KnownPreviousVersionBytes) +
                                   (file.UnknownPreviousVersionSizeCount == 0
                                       ? ""
                                       : $" +?({file.UnknownPreviousVersionSizeCount})");
                 eventArgs.FormattingApplied = true;
                 break;
             case "Reclaimable":
-                eventArgs.Value = ByteSizeFormatter.Format(file.KnownReclaimableBytes) +
+                eventArgs.Value = SizeText.Of(file.KnownReclaimableBytes) +
                                   (file.UnknownDeleteCandidateSizeCount == 0
                                       ? ""
                                       : $" +?({file.UnknownDeleteCandidateSizeCount})");

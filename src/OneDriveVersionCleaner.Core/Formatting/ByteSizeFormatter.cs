@@ -37,9 +37,14 @@ public static class ByteSizeFormatter
         return $"{value.ToString(format, formatProvider ?? CultureInfo.CurrentCulture)} {Units[unitIndex]}";
     }
 
+    /// <summary>
+    /// Formats a size that may be missing. <c>unknownText</c> stands in for one the service did
+    /// not report, and has no default on purpose: what a reader should see depends on the
+    /// interface language, and what a file should contain does not, so the caller decides.
+    /// </summary>
     public static string Format(
         long? bytes,
-        string unknownText = "不明",
+        string unknownText,
         int maximumDecimalPlaces = 1,
         IFormatProvider? formatProvider = null) =>
         bytes.HasValue

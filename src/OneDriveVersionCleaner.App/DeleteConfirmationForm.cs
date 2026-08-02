@@ -1,6 +1,7 @@
 using System.Text;
+using OneDriveVersionCleaner.App.Localization;
 using OneDriveVersionCleaner.Core.Deletion;
-using OneDriveVersionCleaner.Core.Formatting;
+using static OneDriveVersionCleaner.App.Localization.Localization;
 
 namespace OneDriveVersionCleaner.App;
 
@@ -21,6 +22,7 @@ internal sealed partial class DeleteConfirmationForm : Form
         ArgumentNullException.ThrowIfNull(plan);
 
         InitializeComponent();
+        ApplyLocalizedText();
         ApplyDerivedFonts();
         ApplyPlan(plan, policyProtectedCount);
 
@@ -29,6 +31,29 @@ internal sealed partial class DeleteConfirmationForm : Form
         // surface would silently point it at the execute button again.
         CancelButton = _cancelButton;
         AcceptButton = _cancelButton;
+    }
+
+    /// <summary>
+    /// Puts the current interface language over the English the design surface carries. The
+    /// dialog is built fresh for every run, so it never has to follow a language change.
+    /// </summary>
+    private void ApplyLocalizedText()
+    {
+        Text = Loc(en: "Confirm move to recycle bin", ja: "ごみ箱へ移動する確認");
+        _targetGroup.Text = Loc(en: "Versions to move", ja: "移動するバージョン");
+        _cancelButton.Text = Loc(en: "Cancel", ja: "キャンセル");
+        _executeButton.Text = Loc(en: "Move to recycle bin", ja: "ごみ箱へ移動");
+        _notesLabel.Text = Loc(
+            en: "• The file itself and its current version are never touched.\r\n" +
+                "• Moved versions can be restored from the OneDrive recycle bin.\r\n" +
+                "• Recycle bin items still use quota. Empty it to get the space back.\r\n" +
+                "• Versions under a retention policy or a legal hold may refuse to move.\r\n" +
+                "• The local copy of the current file is checked right after the move.",
+            ja: "・ファイル本体と現行バージョンは対象になりません。\r\n" +
+                "・移動したバージョンはOneDriveのごみ箱から復元できます。\r\n" +
+                "・ごみ箱の項目も容量を消費します。容量を戻すにはごみ箱を空にしてください。\r\n" +
+                "・保持ポリシーや訴訟ホールドの対象は、移動できない場合があります。\r\n" +
+                "・移動の直後に、ローカルの現行ファイルが無事かを自動で確認します。");
     }
 
     /// <summary>
@@ -54,15 +79,22 @@ internal sealed partial class DeleteConfirmationForm : Form
     {
         var unknownSuffix = plan.UnknownSizeCount == 0
             ? ""
-            : $"（サイズ不明 {plan.UnknownSizeCount:N0}件を除く）";
+            : Loc(en: $" (excluding {plan.UnknownSizeCount:N0} of unknown size)",
+                  ja: $"（サイズ不明 {plan.UnknownSizeCount:N0}件を除く）");
         var protectedLine = policyProtectedCount == 0
             ? ""
-            : $"\r\n現在の保持条件では残る対象を {policyProtectedCount:N0}件 含みます。";
+            : Loc(en: $"\r\n{policyProtectedCount:N0} of these would be kept by the current rules.",
+                  ja: $"\r\n現在の保持条件では残る対象を {policyProtectedCount:N0}件 含みます。");
 
-        return
-            $"過去バージョン {plan.VersionCount:N0}件（{plan.FileCount:N0}ファイル）をごみ箱へ移動します。\r\n" +
-            $"削減見込み容量: {ByteSizeFormatter.Format(plan.KnownReclaimableBytes)}{unknownSuffix}" +
-            protectedLine;
+        return Loc(
+                   en: $"Moving {plan.VersionCount:N0} past versions " +
+                       $"({plan.FileCount:N0} files) to the recycle bin.\r\n" +
+                       $"Space expected back: {SizeText.Of(plan.KnownReclaimableBytes)}",
+                   ja: $"過去バージョン {plan.VersionCount:N0}件（{plan.FileCount:N0}ファイル）を" +
+                       "ごみ箱へ移動します。\r\n" +
+                       $"削減見込み容量: {SizeText.Of(plan.KnownReclaimableBytes)}") +
+               unknownSuffix +
+               protectedLine;
     }
 
     private static string BuildTargetList(VersionDeletionPlan plan)
@@ -75,10 +107,10 @@ internal sealed partial class DeleteConfirmationForm : Form
             {
                 var created = version.Created.HasValue
                     ? version.Created.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-                    : "日時不明";
+                    : Loc(en: "date unknown  ", ja: "日時不明　　　");
                 builder.AppendLine(
                     $"　{version.Label ?? version.VersionId,-8} {created}  " +
-                    $"{ByteSizeFormatter.Format(version.Size)}");
+                    $"{SizeText.Of(version.Size)}");
             }
         }
 

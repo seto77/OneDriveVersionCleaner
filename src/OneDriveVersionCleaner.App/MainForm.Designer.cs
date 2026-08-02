@@ -28,6 +28,10 @@ namespace OneDriveVersionCleaner.App
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
+            _menuStrip = new MenuStrip();
+            _languageMenu = new ToolStripMenuItem();
+            _englishMenuItem = new ToolStripMenuItem();
+            _japaneseMenuItem = new ToolStripMenuItem();
             _rootLayout = new TableLayoutPanel();
             _connectionGroup = new GroupBox();
             _connectionLayout = new TableLayoutPanel();
@@ -45,8 +49,8 @@ namespace OneDriveVersionCleaner.App
             _exportButton = new Button();
             _deleteButton = new Button();
             _policyGroup = new GroupBox();
-            flowLayoutPanel1 = new FlowLayoutPanel();
-            label1 = new Label();
+            _exclusionsFlow = new FlowLayoutPanel();
+            _exclusionsHeadingLabel = new Label();
             _keepVersionsPanel = new FlowLayoutPanel();
             _keepVersionsLabel = new Label();
             _keepVersionsInput = new NumericUpDown();
@@ -60,7 +64,7 @@ namespace OneDriveVersionCleaner.App
             _protectDaysInput = new NumericUpDown();
             _protectDaysSuffix = new Label();
             _policyFlow = new FlowLayoutPanel();
-            label2 = new Label();
+            _targetsHeadingLabel = new Label();
             _minimumFileSizePanel = new FlowLayoutPanel();
             _minimumFileSizeLabel = new Label();
             _minimumFileSizeInput = new NumericUpDown();
@@ -87,7 +91,7 @@ namespace OneDriveVersionCleaner.App
             _versionsFileHistorySizeColumn = new DataGridViewTextBoxColumn();
             _versionsDecisionColumn = new DataGridViewTextBoxColumn();
             _versionsReasonsColumn = new DataGridViewTextBoxColumn();
-            panel1 = new Panel();
+            _versionsHeaderPanel = new Panel();
             _versionsHeaderLabel = new Label();
             _candidatesOnlyCheck = new CheckBox();
             _filesLayout = new TableLayoutPanel();
@@ -109,12 +113,13 @@ namespace OneDriveVersionCleaner.App
             _statusLabel = new Label();
             _progressBar = new ProgressBar();
             _toolTip = new ToolTip(components);
+            _menuStrip.SuspendLayout();
             _rootLayout.SuspendLayout();
             _connectionGroup.SuspendLayout();
             _connectionLayout.SuspendLayout();
             _actionsPanel.SuspendLayout();
             _policyGroup.SuspendLayout();
-            flowLayoutPanel1.SuspendLayout();
+            _exclusionsFlow.SuspendLayout();
             _keepVersionsPanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)_keepVersionsInput).BeginInit();
             _keepDaysPanel.SuspendLayout();
@@ -135,15 +140,46 @@ namespace OneDriveVersionCleaner.App
             _splitContainer.SuspendLayout();
             _versionsLayout.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)_versionsGrid).BeginInit();
-            panel1.SuspendLayout();
+            _versionsHeaderPanel.SuspendLayout();
             _filesLayout.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)_filesGrid).BeginInit();
             _fileContextMenu.SuspendLayout();
             _statusPanel.SuspendLayout();
             SuspendLayout();
-            // 
+            //
+            // _menuStrip
+            //
+            _menuStrip.Items.AddRange(new ToolStripItem[] { _languageMenu });
+            _menuStrip.Location = new Point(0, 0);
+            _menuStrip.Name = "_menuStrip";
+            _menuStrip.Size = new Size(1344, 24);
+            _menuStrip.TabIndex = 0;
+            //
+            // _languageMenu
+            //
+            _languageMenu.DropDownItems.AddRange(new ToolStripItem[] { _englishMenuItem, _japaneseMenuItem });
+            _languageMenu.Name = "_languageMenu";
+            _languageMenu.Size = new Size(71, 20);
+            _languageMenu.Text = "&Language";
+            //
+            // _englishMenuItem
+            //
+            // The two entries name themselves, so a reader who cannot read the language the
+            // interface is currently in can still find their own.
+            _englishMenuItem.Name = "_englishMenuItem";
+            _englishMenuItem.Size = new Size(124, 22);
+            _englishMenuItem.Text = "English";
+            _englishMenuItem.Click += EnglishMenuItemOnClick;
+            //
+            // _japaneseMenuItem
+            //
+            _japaneseMenuItem.Name = "_japaneseMenuItem";
+            _japaneseMenuItem.Size = new Size(124, 22);
+            _japaneseMenuItem.Text = "日本語";
+            _japaneseMenuItem.Click += JapaneseMenuItemOnClick;
+            //
             // _rootLayout
-            // 
+            //
             _rootLayout.ColumnCount = 1;
             _rootLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 20F));
             _rootLayout.Controls.Add(_connectionGroup, 0, 0);
@@ -175,7 +211,7 @@ namespace OneDriveVersionCleaner.App
             _connectionGroup.Size = new Size(1318, 178);
             _connectionGroup.TabIndex = 0;
             _connectionGroup.TabStop = false;
-            _connectionGroup.Text = "接続と対象（管理センター不要／自分の OneDrive のみ）";
+            _connectionGroup.Text = "Connection and target (no admin center, your own OneDrive only)";
             // 
             // _connectionLayout
             // 
@@ -212,7 +248,7 @@ namespace OneDriveVersionCleaner.App
             _accountLabel.Padding = new Padding(0, 2, 0, 6);
             _accountLabel.Size = new Size(247, 27);
             _accountLabel.TabIndex = 0;
-            _accountLabel.Text = "OneDriveアカウントを自動検出しています...";
+            _accountLabel.Text = "Detecting your OneDrive account...";
             // 
             // _rootLabel
             // 
@@ -223,7 +259,7 @@ namespace OneDriveVersionCleaner.App
             _rootLabel.Name = "_rootLabel";
             _rootLabel.Size = new Size(68, 19);
             _rootLabel.TabIndex = 1;
-            _rootLabel.Text = "同期ルート";
+            _rootLabel.Text = "Sync root";
             // 
             // _rootBox
             // 
@@ -242,7 +278,7 @@ namespace OneDriveVersionCleaner.App
             _browseRootButton.Name = "_browseRootButton";
             _browseRootButton.Size = new Size(75, 29);
             _browseRootButton.TabIndex = 3;
-            _browseRootButton.Text = "再検出";
+            _browseRootButton.Text = "Rescan";
             _browseRootButton.Click += BrowseRootButtonOnClick;
             // 
             // _targetLabel
@@ -254,7 +290,7 @@ namespace OneDriveVersionCleaner.App
             _targetLabel.Name = "_targetLabel";
             _targetLabel.Size = new Size(89, 19);
             _targetLabel.TabIndex = 4;
-            _targetLabel.Text = "対象フォルダー";
+            _targetLabel.Text = "Target folder";
             // 
             // _targetBox
             // 
@@ -275,7 +311,7 @@ namespace OneDriveVersionCleaner.App
             _browseTargetButton.Name = "_browseTargetButton";
             _browseTargetButton.Size = new Size(108, 29);
             _browseTargetButton.TabIndex = 6;
-            _browseTargetButton.Text = "フォルダー選択...";
+            _browseTargetButton.Text = "Choose folder...";
             _browseTargetButton.Click += BrowseTargetButtonOnClick;
             // 
             // _actionsPanel
@@ -303,7 +339,7 @@ namespace OneDriveVersionCleaner.App
             _probeButton.Name = "_probeButton";
             _probeButton.Size = new Size(47, 29);
             _probeButton.TabIndex = 0;
-            _probeButton.Text = "接続";
+            _probeButton.Text = "Connect";
             _probeButton.Click += ProbeButtonOnClick;
             // 
             // _scanButton
@@ -314,7 +350,7 @@ namespace OneDriveVersionCleaner.App
             _scanButton.Name = "_scanButton";
             _scanButton.Size = new Size(86, 29);
             _scanButton.TabIndex = 1;
-            _scanButton.Text = "履歴を取得";
+            _scanButton.Text = "Read history";
             _scanButton.Click += ScanButtonOnClick;
             // 
             // _stopButton
@@ -326,7 +362,7 @@ namespace OneDriveVersionCleaner.App
             _stopButton.Name = "_stopButton";
             _stopButton.Size = new Size(47, 29);
             _stopButton.TabIndex = 2;
-            _stopButton.Text = "停止";
+            _stopButton.Text = "Stop";
             _stopButton.Click += StopButtonOnClick;
             // 
             // _exportButton
@@ -338,7 +374,7 @@ namespace OneDriveVersionCleaner.App
             _exportButton.Name = "_exportButton";
             _exportButton.Size = new Size(122, 29);
             _exportButton.TabIndex = 3;
-            _exportButton.Text = "CSV / JSON 出力";
+            _exportButton.Text = "Export CSV / JSON";
             _exportButton.Click += ExportButtonOnClick;
             // 
             // _deleteButton
@@ -351,14 +387,14 @@ namespace OneDriveVersionCleaner.App
             _deleteButton.Name = "_deleteButton";
             _deleteButton.Size = new Size(132, 29);
             _deleteButton.TabIndex = 4;
-            _deleteButton.Text = "選択をごみ箱へ移動";
+            _deleteButton.Text = "Move selection to recycle bin";
             _deleteButton.Click += DeleteButtonOnClick;
             // 
             // _policyGroup
             // 
             _policyGroup.AutoSize = true;
             _policyGroup.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            _policyGroup.Controls.Add(flowLayoutPanel1);
+            _policyGroup.Controls.Add(_exclusionsFlow);
             _policyGroup.Controls.Add(_policyFlow);
             _policyGroup.Dock = DockStyle.Top;
             _policyGroup.Location = new Point(13, 197);
@@ -367,33 +403,34 @@ namespace OneDriveVersionCleaner.App
             _policyGroup.Size = new Size(1318, 127);
             _policyGroup.TabIndex = 1;
             _policyGroup.TabStop = false;
-            _policyGroup.Text = "条件（変更すると即時再計算）";
+            _policyGroup.Text = "Rules (recalculated as you change them)";
             //
-            // flowLayoutPanel1
+            // _exclusionsFlow
             //
-            flowLayoutPanel1.AutoSize = true;
-            flowLayoutPanel1.Controls.Add(label1);
-            flowLayoutPanel1.Controls.Add(_keepVersionsPanel);
-            flowLayoutPanel1.Controls.Add(_keepDaysPanel);
-            flowLayoutPanel1.Controls.Add(_protectDaysPanel);
-            flowLayoutPanel1.Dock = DockStyle.Top;
-            flowLayoutPanel1.Location = new Point(8, 57);
-            flowLayoutPanel1.Name = "flowLayoutPanel1";
-            flowLayoutPanel1.Size = new Size(1302, 31);
-            flowLayoutPanel1.TabIndex = 1;
-            flowLayoutPanel1.WrapContents = false;
+            _exclusionsFlow.AutoSize = true;
+            _exclusionsFlow.Controls.Add(_exclusionsHeadingLabel);
+            _exclusionsFlow.Controls.Add(_keepVersionsPanel);
+            _exclusionsFlow.Controls.Add(_keepDaysPanel);
+            _exclusionsFlow.Controls.Add(_protectDaysPanel);
+            _exclusionsFlow.Dock = DockStyle.Top;
+            _exclusionsFlow.Location = new Point(8, 57);
+            _exclusionsFlow.Name = "_exclusionsFlow";
+            _exclusionsFlow.Size = new Size(1302, 31);
+            _exclusionsFlow.TabIndex = 1;
+            _exclusionsFlow.WrapContents = false;
             // 
-            // label1
+            // _exclusionsHeadingLabel
             // 
-            label1.Anchor = AnchorStyles.Left;
-            label1.AutoSize = true;
-            label1.Font = new Font("Yu Gothic UI", 10F, FontStyle.Bold);
-            label1.Location = new Point(3, 8);
-            label1.Margin = new Padding(3, 8, 8, 3);
-            label1.Name = "label1";
-            label1.Size = new Size(65, 19);
-            label1.TabIndex = 4;
-            label1.Text = "除外条件";
+            // No Font here: the bold heading is derived from the ambient font at run time, so
+            // it follows the interface language instead of freezing one machine's font family.
+            _exclusionsHeadingLabel.Anchor = AnchorStyles.Left;
+            _exclusionsHeadingLabel.AutoSize = true;
+            _exclusionsHeadingLabel.Location = new Point(3, 8);
+            _exclusionsHeadingLabel.Margin = new Padding(3, 8, 8, 3);
+            _exclusionsHeadingLabel.Name = "_exclusionsHeadingLabel";
+            _exclusionsHeadingLabel.Size = new Size(65, 19);
+            _exclusionsHeadingLabel.TabIndex = 4;
+            _exclusionsHeadingLabel.Text = "Exclusions";
             // 
             // _keepVersionsPanel
             // 
@@ -417,8 +454,8 @@ namespace OneDriveVersionCleaner.App
             _keepVersionsLabel.Name = "_keepVersionsLabel";
             _keepVersionsLabel.Size = new Size(76, 19);
             _keepVersionsLabel.TabIndex = 0;
-            _keepVersionsLabel.Text = "最近の履歴";
-            _toolTip.SetToolTip(_keepVersionsLabel, "各ファイルについて、新しいものから数えてこの件数の過去バージョンを残します。0で無効。");
+            _keepVersionsLabel.Text = "Newest versions";
+            _toolTip.SetToolTip(_keepVersionsLabel, "Keeps this many past versions of each file, counting from the newest. 0 turns the rule off.");
             // 
             // _keepVersionsInput
             // 
@@ -430,7 +467,7 @@ namespace OneDriveVersionCleaner.App
             _keepVersionsInput.TabIndex = 1;
             _keepVersionsInput.TextAlign = HorizontalAlignment.Right;
             _keepVersionsInput.ThousandsSeparator = true;
-            _toolTip.SetToolTip(_keepVersionsInput, "各ファイルについて、新しいものから数えてこの件数の過去バージョンを残します。0で無効。");
+            _toolTip.SetToolTip(_keepVersionsInput, "Keeps this many past versions of each file, counting from the newest. 0 turns the rule off.");
             // 
             // _keepVersionsSuffix
             // 
@@ -441,8 +478,8 @@ namespace OneDriveVersionCleaner.App
             _keepVersionsSuffix.Name = "_keepVersionsSuffix";
             _keepVersionsSuffix.Size = new Size(23, 19);
             _keepVersionsSuffix.TabIndex = 2;
-            _keepVersionsSuffix.Text = "件";
-            _toolTip.SetToolTip(_keepVersionsSuffix, "各ファイルについて、新しいものから数えてこの件数の過去バージョンを残します。0で無効。");
+            _keepVersionsSuffix.Text = "kept";
+            _toolTip.SetToolTip(_keepVersionsSuffix, "Keeps this many past versions of each file, counting from the newest. 0 turns the rule off.");
             // 
             // _keepDaysPanel
             // 
@@ -466,8 +503,8 @@ namespace OneDriveVersionCleaner.App
             _keepDaysLabel.Name = "_keepDaysLabel";
             _keepDaysLabel.Size = new Size(133, 19);
             _keepDaysLabel.TabIndex = 0;
-            _keepDaysLabel.Text = "最終更新日から遡って";
-            _toolTip.SetToolTip(_keepDaysLabel, "そのファイルの最終更新日時から遡ってこの日数以内に作られた過去バージョンを残します。\n現在時刻ではなくファイル自身の更新日時が基準です。0で無効。");
+            _keepDaysLabel.Text = "Back from last modified";
+            _toolTip.SetToolTip(_keepDaysLabel, "Keeps past versions created within this many days back from the file's own last modification.\nThe reference point is the file's timestamp, not the current time. 0 turns the rule off.");
             // 
             // _keepDaysInput
             // 
@@ -479,7 +516,7 @@ namespace OneDriveVersionCleaner.App
             _keepDaysInput.TabIndex = 1;
             _keepDaysInput.TextAlign = HorizontalAlignment.Right;
             _keepDaysInput.ThousandsSeparator = true;
-            _toolTip.SetToolTip(_keepDaysInput, "そのファイルの最終更新日時から遡ってこの日数以内に作られた過去バージョンを残します。\n現在時刻ではなくファイル自身の更新日時が基準です。0で無効。");
+            _toolTip.SetToolTip(_keepDaysInput, "Keeps past versions created within this many days back from the file's own last modification.\nThe reference point is the file's timestamp, not the current time. 0 turns the rule off.");
             // 
             // _keepDaysSuffix
             // 
@@ -490,8 +527,8 @@ namespace OneDriveVersionCleaner.App
             _keepDaysSuffix.Name = "_keepDaysSuffix";
             _keepDaysSuffix.Size = new Size(51, 19);
             _keepDaysSuffix.TabIndex = 2;
-            _keepDaysSuffix.Text = "日以内";
-            _toolTip.SetToolTip(_keepDaysSuffix, "そのファイルの最終更新日時から遡ってこの日数以内に作られた過去バージョンを残します。\n現在時刻ではなくファイル自身の更新日時が基準です。0で無効。");
+            _keepDaysSuffix.Text = "days";
+            _toolTip.SetToolTip(_keepDaysSuffix, "Keeps past versions created within this many days back from the file's own last modification.\nThe reference point is the file's timestamp, not the current time. 0 turns the rule off.");
             // 
             // _protectDaysPanel
             // 
@@ -515,8 +552,8 @@ namespace OneDriveVersionCleaner.App
             _protectDaysLabel.Name = "_protectDaysLabel";
             _protectDaysLabel.Size = new Size(112, 19);
             _protectDaysLabel.TabIndex = 0;
-            _protectDaysLabel.Text = "更新日が現在から";
-            _toolTip.SetToolTip(_protectDaysLabel, "現在時刻からこの日数以内に更新されたファイルは、丸ごと処理対象から外します。0で無効。");
+            _protectDaysLabel.Text = "Modified within the last";
+            _toolTip.SetToolTip(_protectDaysLabel, "Leaves out entirely any file modified within this many days of now. 0 turns the rule off.");
             // 
             // _protectDaysInput
             // 
@@ -528,7 +565,7 @@ namespace OneDriveVersionCleaner.App
             _protectDaysInput.TabIndex = 1;
             _protectDaysInput.TextAlign = HorizontalAlignment.Right;
             _protectDaysInput.ThousandsSeparator = true;
-            _toolTip.SetToolTip(_protectDaysInput, "現在時刻からこの日数以内に更新されたファイルは、丸ごと処理対象から外します。0で無効。");
+            _toolTip.SetToolTip(_protectDaysInput, "Leaves out entirely any file modified within this many days of now. 0 turns the rule off.");
             // 
             // _protectDaysSuffix
             // 
@@ -539,13 +576,13 @@ namespace OneDriveVersionCleaner.App
             _protectDaysSuffix.Name = "_protectDaysSuffix";
             _protectDaysSuffix.Size = new Size(51, 19);
             _protectDaysSuffix.TabIndex = 2;
-            _protectDaysSuffix.Text = "日以内";
-            _toolTip.SetToolTip(_protectDaysSuffix, "現在時刻からこの日数以内に更新されたファイルは、丸ごと処理対象から外します。0で無効。");
+            _protectDaysSuffix.Text = "days";
+            _toolTip.SetToolTip(_protectDaysSuffix, "Leaves out entirely any file modified within this many days of now. 0 turns the rule off.");
             // 
             // _policyFlow
             // 
             _policyFlow.AutoSize = true;
-            _policyFlow.Controls.Add(label2);
+            _policyFlow.Controls.Add(_targetsHeadingLabel);
             _policyFlow.Controls.Add(_minimumFileSizePanel);
             _policyFlow.Controls.Add(_minimumHistoryPanel);
             _policyFlow.Controls.Add(_cacheAgePanel);
@@ -556,17 +593,17 @@ namespace OneDriveVersionCleaner.App
             _policyFlow.TabIndex = 0;
             _policyFlow.WrapContents = false;
             // 
-            // label2
+            // _targetsHeadingLabel
             // 
-            label2.Anchor = AnchorStyles.Left;
-            label2.AutoSize = true;
-            label2.Font = new Font("Yu Gothic UI", 10F, FontStyle.Bold);
-            label2.Location = new Point(3, 8);
-            label2.Margin = new Padding(3, 8, 8, 3);
-            label2.Name = "label2";
-            label2.Size = new Size(65, 19);
-            label2.TabIndex = 4;
-            label2.Text = "対象条件";
+            // See _exclusionsHeadingLabel: the bold heading is derived at run time.
+            _targetsHeadingLabel.Anchor = AnchorStyles.Left;
+            _targetsHeadingLabel.AutoSize = true;
+            _targetsHeadingLabel.Location = new Point(3, 8);
+            _targetsHeadingLabel.Margin = new Padding(3, 8, 8, 3);
+            _targetsHeadingLabel.Name = "_targetsHeadingLabel";
+            _targetsHeadingLabel.Size = new Size(65, 19);
+            _targetsHeadingLabel.TabIndex = 4;
+            _targetsHeadingLabel.Text = "Targets";
             // 
             // _minimumFileSizePanel
             // 
@@ -590,8 +627,8 @@ namespace OneDriveVersionCleaner.App
             _minimumFileSizeLabel.Name = "_minimumFileSizeLabel";
             _minimumFileSizeLabel.Size = new Size(93, 19);
             _minimumFileSizeLabel.TabIndex = 0;
-            _minimumFileSizeLabel.Text = "ファイルサイズが";
-            _toolTip.SetToolTip(_minimumFileSizeLabel, "現行サイズがこの値以上のファイルだけを処理します。\n小さいファイルは何世代あっても削減量が知れているため、サーバーに問い合わせません。\nサイズはローカルの同期フォルダーから読むので、この絞り込みに通信は発生しません。0で無効。");
+            _minimumFileSizeLabel.Text = "File size";
+            _toolTip.SetToolTip(_minimumFileSizeLabel, "Only files whose current size is at least this are processed.\nA small file cannot free much however many versions it has, so it is never asked about.\nThe size is read from the local sync folder, so this filter costs no requests. 0 turns the rule off.");
             // 
             // _minimumFileSizeInput
             // 
@@ -603,7 +640,7 @@ namespace OneDriveVersionCleaner.App
             _minimumFileSizeInput.TabIndex = 1;
             _minimumFileSizeInput.TextAlign = HorizontalAlignment.Right;
             _minimumFileSizeInput.ThousandsSeparator = true;
-            _toolTip.SetToolTip(_minimumFileSizeInput, "現行サイズがこの値以上のファイルだけを処理します。\n小さいファイルは何世代あっても削減量が知れているため、サーバーに問い合わせません。\nサイズはローカルの同期フォルダーから読むので、この絞り込みに通信は発生しません。0で無効。");
+            _toolTip.SetToolTip(_minimumFileSizeInput, "Only files whose current size is at least this are processed.\nA small file cannot free much however many versions it has, so it is never asked about.\nThe size is read from the local sync folder, so this filter costs no requests. 0 turns the rule off.");
             // 
             // _minimumFileSizeSuffix
             // 
@@ -614,8 +651,8 @@ namespace OneDriveVersionCleaner.App
             _minimumFileSizeSuffix.Name = "_minimumFileSizeSuffix";
             _minimumFileSizeSuffix.Size = new Size(58, 19);
             _minimumFileSizeSuffix.TabIndex = 2;
-            _minimumFileSizeSuffix.Text = "MB以上";
-            _toolTip.SetToolTip(_minimumFileSizeSuffix, "現行サイズがこの値以上のファイルだけを処理します。\n小さいファイルは何世代あっても削減量が知れているため、サーバーに問い合わせません。\nサイズはローカルの同期フォルダーから読むので、この絞り込みに通信は発生しません。0で無効。");
+            _minimumFileSizeSuffix.Text = "MB or more";
+            _toolTip.SetToolTip(_minimumFileSizeSuffix, "Only files whose current size is at least this are processed.\nA small file cannot free much however many versions it has, so it is never asked about.\nThe size is read from the local sync folder, so this filter costs no requests. 0 turns the rule off.");
             // 
             // _minimumHistoryPanel
             // 
@@ -639,8 +676,8 @@ namespace OneDriveVersionCleaner.App
             _minimumHistoryLabel.Name = "_minimumHistoryLabel";
             _minimumHistoryLabel.Size = new Size(94, 19);
             _minimumHistoryLabel.TabIndex = 0;
-            _minimumHistoryLabel.Text = "総履歴サイズが";
-            _toolTip.SetToolTip(_minimumHistoryLabel, "過去バージョンの合計がこの値以上のファイルだけを処理します。\nこれ未満のファイルは丸ごと対象外です。0で無効。");
+            _minimumHistoryLabel.Text = "History total";
+            _toolTip.SetToolTip(_minimumHistoryLabel, "Only files whose past versions add up to at least this are processed.\nAnything below that is left out entirely. 0 turns the rule off.");
             // 
             // _minimumHistoryInput
             // 
@@ -652,7 +689,7 @@ namespace OneDriveVersionCleaner.App
             _minimumHistoryInput.TabIndex = 1;
             _minimumHistoryInput.TextAlign = HorizontalAlignment.Right;
             _minimumHistoryInput.ThousandsSeparator = true;
-            _toolTip.SetToolTip(_minimumHistoryInput, "過去バージョンの合計がこの値以上のファイルだけを処理します。\nこれ未満のファイルは丸ごと対象外です。0で無効。");
+            _toolTip.SetToolTip(_minimumHistoryInput, "Only files whose past versions add up to at least this are processed.\nAnything below that is left out entirely. 0 turns the rule off.");
             // 
             // _minimumHistorySuffix
             // 
@@ -663,8 +700,8 @@ namespace OneDriveVersionCleaner.App
             _minimumHistorySuffix.Name = "_minimumHistorySuffix";
             _minimumHistorySuffix.Size = new Size(58, 19);
             _minimumHistorySuffix.TabIndex = 2;
-            _minimumHistorySuffix.Text = "MB以上";
-            _toolTip.SetToolTip(_minimumHistorySuffix, "過去バージョンの合計がこの値以上のファイルだけを処理します。\nこれ未満のファイルは丸ごと対象外です。0で無効。");
+            _minimumHistorySuffix.Text = "MB or more";
+            _toolTip.SetToolTip(_minimumHistorySuffix, "Only files whose past versions add up to at least this are processed.\nAnything below that is left out entirely. 0 turns the rule off.");
             // 
             // _cacheAgePanel
             // 
@@ -688,8 +725,8 @@ namespace OneDriveVersionCleaner.App
             _cacheAgeLabel.Name = "_cacheAgeLabel";
             _cacheAgeLabel.Size = new Size(89, 19);
             _cacheAgeLabel.TabIndex = 0;
-            _cacheAgeLabel.Text = "問合わせ間隔";
-            _toolTip.SetToolTip(_cacheAgeLabel, "一度取得したバージョン履歴は保存され、次回以降は再利用します。\n同じファイルを問い合わせ直すのは、前回の取得からこの日数が経ち、かつ\nファイルが更新されている場合だけです。\n履歴は編集したときにしか増えないため、更新のないファイルは問い合わせません。0で毎回。");
+            _cacheAgeLabel.Text = "Re-query after";
+            _toolTip.SetToolTip(_cacheAgeLabel, "Version history that has been read once is stored and reused.\nA file is asked about again only once this many days have passed since that read\nand the file itself has changed.\nHistory only grows when a file is edited, so an unchanged file is never asked about. 0 asks every time.");
             // 
             // _cacheAgeInput
             // 
@@ -701,7 +738,7 @@ namespace OneDriveVersionCleaner.App
             _cacheAgeInput.TabIndex = 1;
             _cacheAgeInput.TextAlign = HorizontalAlignment.Right;
             _cacheAgeInput.ThousandsSeparator = true;
-            _toolTip.SetToolTip(_cacheAgeInput, "一度取得したバージョン履歴は保存され、次回以降は再利用します。\n同じファイルを問い合わせ直すのは、前回の取得からこの日数が経ち、かつ\nファイルが更新されている場合だけです。\n履歴は編集したときにしか増えないため、更新のないファイルは問い合わせません。0で毎回。");
+            _toolTip.SetToolTip(_cacheAgeInput, "Version history that has been read once is stored and reused.\nA file is asked about again only once this many days have passed since that read\nand the file itself has changed.\nHistory only grows when a file is edited, so an unchanged file is never asked about. 0 asks every time.");
             // 
             // _cacheAgeSuffix
             // 
@@ -712,8 +749,8 @@ namespace OneDriveVersionCleaner.App
             _cacheAgeSuffix.Name = "_cacheAgeSuffix";
             _cacheAgeSuffix.Size = new Size(51, 19);
             _cacheAgeSuffix.TabIndex = 2;
-            _cacheAgeSuffix.Text = "日以上";
-            _toolTip.SetToolTip(_cacheAgeSuffix, "一度取得したバージョン履歴は保存され、次回以降は再利用します。\n同じファイルを問い合わせ直すのは、前回の取得からこの日数が経ち、かつ\nファイルが更新されている場合だけです。\n履歴は編集したときにしか増えないため、更新のないファイルは問い合わせません。0で毎回。");
+            _cacheAgeSuffix.Text = "days or more";
+            _toolTip.SetToolTip(_cacheAgeSuffix, "Version history that has been read once is stored and reused.\nA file is asked about again only once this many days have passed since that read\nand the file itself has changed.\nHistory only grows when a file is edited, so an unchanged file is never asked about. 0 asks every time.");
             // 
             // _summaryPanel
             // 
@@ -737,7 +774,7 @@ namespace OneDriveVersionCleaner.App
             _summaryLabel.Name = "_summaryLabel";
             _summaryLabel.Size = new Size(137, 19);
             _summaryLabel.TabIndex = 0;
-            _summaryLabel.Text = "データはまだありません。";
+            _summaryLabel.Text = "No data yet.";
             // 
             // _splitContainer
             // 
@@ -762,7 +799,7 @@ namespace OneDriveVersionCleaner.App
             _versionsLayout.ColumnCount = 1;
             _versionsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 20F));
             _versionsLayout.Controls.Add(_versionsGrid, 0, 1);
-            _versionsLayout.Controls.Add(panel1, 0, 0);
+            _versionsLayout.Controls.Add(_versionsHeaderPanel, 0, 0);
             _versionsLayout.Dock = DockStyle.Fill;
             _versionsLayout.Location = new Point(0, 0);
             _versionsLayout.Name = "_versionsLayout";
@@ -795,7 +832,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsFileNameColumn
             // 
             _versionsFileNameColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsFileNameColumn.HeaderText = "ファイル名";
+            _versionsFileNameColumn.HeaderText = "File";
             _versionsFileNameColumn.Name = "_versionsFileNameColumn";
             _versionsFileNameColumn.ReadOnly = true;
             _versionsFileNameColumn.Resizable = DataGridViewTriState.True;
@@ -804,7 +841,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsCloudPathColumn
             // 
             _versionsCloudPathColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsCloudPathColumn.HeaderText = "パス";
+            _versionsCloudPathColumn.HeaderText = "Path";
             _versionsCloudPathColumn.Name = "_versionsCloudPathColumn";
             _versionsCloudPathColumn.ReadOnly = true;
             _versionsCloudPathColumn.Resizable = DataGridViewTriState.True;
@@ -813,7 +850,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsVersionLabelColumn
             // 
             _versionsVersionLabelColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsVersionLabelColumn.HeaderText = "バージョン";
+            _versionsVersionLabelColumn.HeaderText = "Version";
             _versionsVersionLabelColumn.Name = "_versionsVersionLabelColumn";
             _versionsVersionLabelColumn.ReadOnly = true;
             _versionsVersionLabelColumn.Resizable = DataGridViewTriState.True;
@@ -822,7 +859,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsCreatedColumn
             // 
             _versionsCreatedColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsCreatedColumn.HeaderText = "作成日時";
+            _versionsCreatedColumn.HeaderText = "Created";
             _versionsCreatedColumn.Name = "_versionsCreatedColumn";
             _versionsCreatedColumn.ReadOnly = true;
             _versionsCreatedColumn.Resizable = DataGridViewTriState.True;
@@ -831,7 +868,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsModifiedByColumn
             // 
             _versionsModifiedByColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsModifiedByColumn.HeaderText = "更新者";
+            _versionsModifiedByColumn.HeaderText = "Modified by";
             _versionsModifiedByColumn.Name = "_versionsModifiedByColumn";
             _versionsModifiedByColumn.ReadOnly = true;
             _versionsModifiedByColumn.Resizable = DataGridViewTriState.True;
@@ -840,7 +877,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsSizeColumn
             // 
             _versionsSizeColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsSizeColumn.HeaderText = "サイズ";
+            _versionsSizeColumn.HeaderText = "Size";
             _versionsSizeColumn.Name = "_versionsSizeColumn";
             _versionsSizeColumn.ReadOnly = true;
             _versionsSizeColumn.Resizable = DataGridViewTriState.True;
@@ -849,7 +886,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsFileHistorySizeColumn
             // 
             _versionsFileHistorySizeColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsFileHistorySizeColumn.HeaderText = "ファイル履歴計";
+            _versionsFileHistorySizeColumn.HeaderText = "File history total";
             _versionsFileHistorySizeColumn.Name = "_versionsFileHistorySizeColumn";
             _versionsFileHistorySizeColumn.ReadOnly = true;
             _versionsFileHistorySizeColumn.Resizable = DataGridViewTriState.True;
@@ -858,7 +895,7 @@ namespace OneDriveVersionCleaner.App
             // _versionsDecisionColumn
             // 
             _versionsDecisionColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsDecisionColumn.HeaderText = "判定";
+            _versionsDecisionColumn.HeaderText = "Verdict";
             _versionsDecisionColumn.Name = "_versionsDecisionColumn";
             _versionsDecisionColumn.ReadOnly = true;
             _versionsDecisionColumn.Resizable = DataGridViewTriState.True;
@@ -867,22 +904,22 @@ namespace OneDriveVersionCleaner.App
             // _versionsReasonsColumn
             // 
             _versionsReasonsColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _versionsReasonsColumn.HeaderText = "理由";
+            _versionsReasonsColumn.HeaderText = "Reasons";
             _versionsReasonsColumn.Name = "_versionsReasonsColumn";
             _versionsReasonsColumn.ReadOnly = true;
             _versionsReasonsColumn.Resizable = DataGridViewTriState.True;
             _versionsReasonsColumn.Width = 260;
             // 
-            // panel1
+            // _versionsHeaderPanel
             // 
-            panel1.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            panel1.Controls.Add(_versionsHeaderLabel);
-            panel1.Controls.Add(_candidatesOnlyCheck);
-            panel1.Dock = DockStyle.Fill;
-            panel1.Location = new Point(3, 3);
-            panel1.Name = "panel1";
-            panel1.Size = new Size(1312, 28);
-            panel1.TabIndex = 8;
+            _versionsHeaderPanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            _versionsHeaderPanel.Controls.Add(_versionsHeaderLabel);
+            _versionsHeaderPanel.Controls.Add(_candidatesOnlyCheck);
+            _versionsHeaderPanel.Dock = DockStyle.Fill;
+            _versionsHeaderPanel.Location = new Point(3, 3);
+            _versionsHeaderPanel.Name = "_versionsHeaderPanel";
+            _versionsHeaderPanel.Size = new Size(1312, 28);
+            _versionsHeaderPanel.TabIndex = 8;
             // 
             // _versionsHeaderLabel
             // 
@@ -893,7 +930,7 @@ namespace OneDriveVersionCleaner.App
             _versionsHeaderLabel.Padding = new Padding(2, 2, 2, 4);
             _versionsHeaderLabel.Size = new Size(91, 25);
             _versionsHeaderLabel.TabIndex = 0;
-            _versionsHeaderLabel.Text = "過去バージョン";
+            _versionsHeaderLabel.Text = "Past versions";
             // 
             // _candidatesOnlyCheck
             // 
@@ -906,7 +943,7 @@ namespace OneDriveVersionCleaner.App
             _candidatesOnlyCheck.Name = "_candidatesOnlyCheck";
             _candidatesOnlyCheck.Size = new Size(135, 28);
             _candidatesOnlyCheck.TabIndex = 7;
-            _candidatesOnlyCheck.Text = "削除候補のみ表示";
+            _candidatesOnlyCheck.Text = "Candidates only";
             _candidatesOnlyCheck.CheckedChanged += CandidatesOnlyCheckOnCheckedChanged;
             // 
             // _filesLayout
@@ -933,7 +970,7 @@ namespace OneDriveVersionCleaner.App
             _filesHeaderLabel.Padding = new Padding(2, 2, 2, 4);
             _filesHeaderLabel.Size = new Size(1312, 25);
             _filesHeaderLabel.TabIndex = 0;
-            _filesHeaderLabel.Text = "ファイル別の履歴容量";
+            _filesHeaderLabel.Text = "History size by file";
             // 
             // _filesGrid
             // 
@@ -960,7 +997,7 @@ namespace OneDriveVersionCleaner.App
             // _filesFileNameColumn
             // 
             _filesFileNameColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesFileNameColumn.HeaderText = "ファイル名";
+            _filesFileNameColumn.HeaderText = "File";
             _filesFileNameColumn.Name = "_filesFileNameColumn";
             _filesFileNameColumn.ReadOnly = true;
             _filesFileNameColumn.Resizable = DataGridViewTriState.True;
@@ -969,7 +1006,7 @@ namespace OneDriveVersionCleaner.App
             // _filesCloudPathColumn
             // 
             _filesCloudPathColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesCloudPathColumn.HeaderText = "パス";
+            _filesCloudPathColumn.HeaderText = "Path";
             _filesCloudPathColumn.Name = "_filesCloudPathColumn";
             _filesCloudPathColumn.ReadOnly = true;
             _filesCloudPathColumn.Resizable = DataGridViewTriState.True;
@@ -978,7 +1015,7 @@ namespace OneDriveVersionCleaner.App
             // _filesCurrentSizeColumn
             // 
             _filesCurrentSizeColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesCurrentSizeColumn.HeaderText = "現行サイズ";
+            _filesCurrentSizeColumn.HeaderText = "Current size";
             _filesCurrentSizeColumn.Name = "_filesCurrentSizeColumn";
             _filesCurrentSizeColumn.ReadOnly = true;
             _filesCurrentSizeColumn.Resizable = DataGridViewTriState.True;
@@ -986,7 +1023,7 @@ namespace OneDriveVersionCleaner.App
             // _filesHistoryCountColumn
             // 
             _filesHistoryCountColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesHistoryCountColumn.HeaderText = "履歴数";
+            _filesHistoryCountColumn.HeaderText = "Versions";
             _filesHistoryCountColumn.Name = "_filesHistoryCountColumn";
             _filesHistoryCountColumn.ReadOnly = true;
             _filesHistoryCountColumn.Resizable = DataGridViewTriState.True;
@@ -995,7 +1032,7 @@ namespace OneDriveVersionCleaner.App
             // _filesHistorySizeColumn
             // 
             _filesHistorySizeColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesHistorySizeColumn.HeaderText = "履歴容量";
+            _filesHistorySizeColumn.HeaderText = "History size";
             _filesHistorySizeColumn.Name = "_filesHistorySizeColumn";
             _filesHistorySizeColumn.ReadOnly = true;
             _filesHistorySizeColumn.Resizable = DataGridViewTriState.True;
@@ -1004,16 +1041,16 @@ namespace OneDriveVersionCleaner.App
             // _filesCandidateCountColumn
             // 
             _filesCandidateCountColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesCandidateCountColumn.HeaderText = "候補数";
+            _filesCandidateCountColumn.HeaderText = "Candidates";
             _filesCandidateCountColumn.Name = "_filesCandidateCountColumn";
             _filesCandidateCountColumn.ReadOnly = true;
             _filesCandidateCountColumn.Resizable = DataGridViewTriState.True;
-            _filesCandidateCountColumn.Width = 75;
+            _filesCandidateCountColumn.Width = 95;
             // 
             // _filesReclaimableColumn
             // 
             _filesReclaimableColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesReclaimableColumn.HeaderText = "削減見込み";
+            _filesReclaimableColumn.HeaderText = "Reclaimable";
             _filesReclaimableColumn.Name = "_filesReclaimableColumn";
             _filesReclaimableColumn.ReadOnly = true;
             _filesReclaimableColumn.Resizable = DataGridViewTriState.True;
@@ -1022,7 +1059,7 @@ namespace OneDriveVersionCleaner.App
             // _filesLastModifiedColumn
             // 
             _filesLastModifiedColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesLastModifiedColumn.HeaderText = "最終更新";
+            _filesLastModifiedColumn.HeaderText = "Last modified";
             _filesLastModifiedColumn.Name = "_filesLastModifiedColumn";
             _filesLastModifiedColumn.ReadOnly = true;
             _filesLastModifiedColumn.Resizable = DataGridViewTriState.True;
@@ -1031,7 +1068,7 @@ namespace OneDriveVersionCleaner.App
             // _filesStatusColumn
             // 
             _filesStatusColumn.AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
-            _filesStatusColumn.HeaderText = "状態";
+            _filesStatusColumn.HeaderText = "Status";
             _filesStatusColumn.Name = "_filesStatusColumn";
             _filesStatusColumn.ReadOnly = true;
             _filesStatusColumn.Resizable = DataGridViewTriState.True;
@@ -1048,14 +1085,14 @@ namespace OneDriveVersionCleaner.App
             // 
             _openFolderMenuItem.Name = "_openFolderMenuItem";
             _openFolderMenuItem.Size = new Size(145, 22);
-            _openFolderMenuItem.Text = "フォルダーを開く";
+            _openFolderMenuItem.Text = "Open folder";
             _openFolderMenuItem.Click += OpenFolderMenuItemOnClick;
             // 
             // _openOnWebMenuItem
             // 
             _openOnWebMenuItem.Name = "_openOnWebMenuItem";
             _openOnWebMenuItem.Size = new Size(145, 22);
-            _openOnWebMenuItem.Text = "Webで開く";
+            _openOnWebMenuItem.Text = "Open on the web";
             _openOnWebMenuItem.Click += OpenOnWebMenuItemOnClick;
             // 
             // _statusPanel
@@ -1082,7 +1119,7 @@ namespace OneDriveVersionCleaner.App
             _statusLabel.Name = "_statusLabel";
             _statusLabel.Size = new Size(65, 19);
             _statusLabel.TabIndex = 0;
-            _statusLabel.Text = "準備完了";
+            _statusLabel.Text = "Ready";
             // 
             // _progressBar
             // 
@@ -1106,7 +1143,10 @@ namespace OneDriveVersionCleaner.App
             AutoScaleMode = AutoScaleMode.Dpi;
             ClientSize = new Size(1344, 1067);
             Controls.Add(_rootLayout);
-            Font = new Font("Yu Gothic UI", 10F);
+            Controls.Add(_menuStrip);
+            // The interface font follows the language; see MainForm.ApplyUiFont.
+            Font = new Font("Segoe UI", 10F);
+            MainMenuStrip = _menuStrip;
             MinimumSize = new Size(1100, 720);
             Name = "MainForm";
             StartPosition = FormStartPosition.CenterScreen;
@@ -1121,8 +1161,8 @@ namespace OneDriveVersionCleaner.App
             _actionsPanel.PerformLayout();
             _policyGroup.ResumeLayout(false);
             _policyGroup.PerformLayout();
-            flowLayoutPanel1.ResumeLayout(false);
-            flowLayoutPanel1.PerformLayout();
+            _exclusionsFlow.ResumeLayout(false);
+            _exclusionsFlow.PerformLayout();
             _keepVersionsPanel.ResumeLayout(false);
             _keepVersionsPanel.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)_keepVersionsInput).EndInit();
@@ -1151,19 +1191,26 @@ namespace OneDriveVersionCleaner.App
             _splitContainer.ResumeLayout(false);
             _versionsLayout.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)_versionsGrid).EndInit();
-            panel1.ResumeLayout(false);
-            panel1.PerformLayout();
+            _versionsHeaderPanel.ResumeLayout(false);
+            _versionsHeaderPanel.PerformLayout();
             _filesLayout.ResumeLayout(false);
             _filesLayout.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)_filesGrid).EndInit();
             _fileContextMenu.ResumeLayout(false);
             _statusPanel.ResumeLayout(false);
             _statusPanel.PerformLayout();
+            _menuStrip.ResumeLayout(false);
+            _menuStrip.PerformLayout();
             ResumeLayout(false);
+            PerformLayout();
         }
 
         #endregion
 
+        private MenuStrip _menuStrip;
+        private ToolStripMenuItem _languageMenu;
+        private ToolStripMenuItem _englishMenuItem;
+        private ToolStripMenuItem _japaneseMenuItem;
         private TableLayoutPanel _rootLayout;
         private GroupBox _connectionGroup;
         private TableLayoutPanel _connectionLayout;
@@ -1241,9 +1288,9 @@ namespace OneDriveVersionCleaner.App
         private ToolStripMenuItem _openFolderMenuItem;
         private ToolStripMenuItem _openOnWebMenuItem;
         private ToolTip _toolTip;
-        private FlowLayoutPanel flowLayoutPanel1;
-        private Label label1;
-        private Label label2;
-        private Panel panel1;
+        private FlowLayoutPanel _exclusionsFlow;
+        private Label _exclusionsHeadingLabel;
+        private Label _targetsHeadingLabel;
+        private Panel _versionsHeaderPanel;
     }
 }

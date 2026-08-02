@@ -21,6 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="OneDriveVersionCleaner.App.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
@@ -32,6 +36,9 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Update="MainForm.Designer.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Update="MainForm.Localization.cs">
       <DependentUpon>MainForm.cs</DependentUpon>
     </Compile>
     <Compile Update="DeleteConfirmationForm.cs">
@@ -48,11 +55,6 @@
     </Compile>
   </ItemGroup>
 
-  <!-- The WebView2 package references both desktop UI assemblies. This app is WinForms-only. -->
-  <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
-    <ItemGroup>
-      <Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
-    </ItemGroup>
-  </Target>
+  <!-- The unused WebView2 WPF reference is dropped for every project by Directory.Build.targets. -->
 
 </Project>

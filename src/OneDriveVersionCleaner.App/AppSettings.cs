@@ -4,6 +4,12 @@ namespace OneDriveVersionCleaner.App;
 
 internal sealed class AppSettings
 {
+    /// <summary>
+    /// The interface language to start in ("en" or "ja"). Empty follows the language Windows is
+    /// displayed in. Whatever the user last picked from the Language menu wins over this.
+    /// </summary>
+    public string Language { get; set; } = string.Empty;
+
     public string LocalOneDriveRoot { get; set; } = string.Empty;
 
     public string TargetPath { get; set; } = string.Empty;
@@ -38,9 +44,17 @@ internal sealed class AppSettings
     public string ExportDirectory { get; set; } =
         "%LOCALAPPDATA%\\OneDriveVersionCleaner\\Reports";
 
-    public static AppSettings Load(out string? warning)
+    /// <summary>
+    /// Reads the settings file, or returns the defaults when there is none.
+    /// </summary>
+    /// <param name="readFailure">
+    /// Why the file could not be read, or null when there was nothing wrong. This is the raw
+    /// reason and not a sentence: the interface language is chosen from the very settings being
+    /// read here, so the wording around it belongs to the window that eventually shows it.
+    /// </param>
+    public static AppSettings Load(out string? readFailure)
     {
-        warning = null;
+        readFailure = null;
         var candidates = new[]
         {
             Path.Combine(Environment.CurrentDirectory, "appsettings.json"),
@@ -66,7 +80,7 @@ internal sealed class AppSettings
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
             {
                 settings = new AppSettings();
-                warning = $"appsettings.json を読み込めませんでした: {exception.Message}";
+                readFailure = exception.Message;
             }
         }
 
