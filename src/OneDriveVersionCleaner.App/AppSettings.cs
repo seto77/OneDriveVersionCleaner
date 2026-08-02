@@ -8,21 +8,24 @@ internal sealed class AppSettings
 
     public string TargetPath { get; set; } = string.Empty;
 
-    public int KeepLatestVersions { get; set; } = 10;
+    /// <summary>How many of the newest versions are kept regardless of age. Zero disables the rule.</summary>
+    public int KeepLatestVersions { get; set; }
 
-    public int KeepDays { get; set; } = 30;
+    /// <summary>
+    /// How far back from the file's own last modification its versions are kept.
+    /// Zero disables the rule.
+    /// </summary>
+    public int KeepDays { get; set; }
 
     public int ProtectRecentlyModifiedFileDays { get; set; } = 7;
 
-    public long MinimumHistorySizeMB { get; set; } = 10;
+    public long MinimumHistorySizeMB { get; set; } = 200;
 
     /// <summary>
     /// Files smaller than this are never asked about. Read from the local sync folder, so the
     /// filter costs nothing and keeps small files from consuming the request budget.
     /// </summary>
     public long MinimumFileSizeMB { get; set; } = 50;
-
-    public int MaximumDeletesPerRun { get; set; } = 100;
 
     public int RetryCount { get; set; } = 5;
 

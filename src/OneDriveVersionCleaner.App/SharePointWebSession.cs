@@ -23,6 +23,14 @@ internal sealed class SharePointWebSession : IDisposable
     private const int MaximumConcurrentRequests = 2;
 
     /// <summary>
+    /// What reading one file's history costs in requests: the file itself, and its version
+    /// collection. Callers estimate the size of a run with this rather than restating the
+    /// multiplier, which would go quietly stale if <see cref="GetFileVersionsAsync"/> changed
+    /// what it asks for.
+    /// </summary>
+    public const int RequestsPerVersionRead = 2;
+
+    /// <summary>
     /// How many times one request waits out a throttle before giving up. Kept small: a scan
     /// issues thousands of requests, so patience per request multiplies into hours.
     /// </summary>
@@ -31,21 +39,12 @@ internal sealed class SharePointWebSession : IDisposable
     /// <summary>Upper bound on a single wait, including a server-supplied Retry-After.</summary>
     private const int MaximumRetryAfterSeconds = 30;
 
-    /// <summary>SharePoint's maximum rows per list query.</summary>
-    private const int ListItemPageSize = 5000;
-
     /// <summary>
     /// Total time an operation may spend waiting out throttling before the session gives up
     /// entirely. Without this the retries alone keep a throttled tenant grinding for hours
     /// while the UI shows nothing but a wait message.
     /// </summary>
     private static readonly TimeSpan ThrottleBudget = TimeSpan.FromMinutes(2);
-
-    /// <summary>
-    /// How many per-file version requests are started at once. A small multiple of the
-    /// concurrency limit keeps the gate saturated without materialising a task per file.
-    /// </summary>
-    private const int ProbeBatchSize = MaximumConcurrentRequests * 8;
 
     private const string VersionSelect =
         "ID,VersionLabel,Created,Length,Size,IsCurrentVersion";
@@ -159,68 +158,6 @@ internal sealed class SharePointWebSession : IDisposable
     }
 
     /// <summary>
-    /// Reads the whole document library as list items, in pages of up to 5,000.
-    /// This is what makes a large library affordable: one request covers thousands of files
-    /// and already reports how much each file's versions occupy.
-    /// Returns null when the query is not usable here, so the caller can walk folders instead.
-    /// </summary>
-    public async Task<IReadOnlyList<SharePointListItemInfo>?> TryEnumerateLibraryItemsAsync(
-        IProgress<int>? progress,
-        CancellationToken cancellationToken)
-    {
-        EnsureVerified();
-
-        // Most specific projection first. Dropping the current size only costs precision: the
-        // total then includes the live file, which over-estimates history and therefore asks
-        // for a few more detail reads than strictly needed - never fewer.
-        foreach (var select in (string[])
-                 [
-                     "FSObjType,FileRef,FileLeafRef,File_x0020_Size,SMTotalFileStreamSize,Modified,UIVersionString",
-                     "FSObjType,FileRef,FileLeafRef,SMTotalFileStreamSize,Modified,UIVersionString",
-                 ])
-        {
-            var items = await TryReadLibraryItemsAsync(select, progress, cancellationToken);
-            if (items is not null)
-            {
-                return items;
-            }
-        }
-
-        return null;
-    }
-
-    private async Task<IReadOnlyList<SharePointListItemInfo>?> TryReadLibraryItemsAsync(
-        string select,
-        IProgress<int>? progress,
-        CancellationToken cancellationToken)
-    {
-        var items = new List<SharePointListItemInfo>();
-        var next = BuildApiUri($"web/DefaultDocumentLibrary/items?$select={select}&$top={ListItemPageSize}");
-
-        try
-        {
-            while (next is not null)
-            {
-                var page = next;
-                var response = await SendGetAsync(page, cancellationToken);
-                EnsureSuccess(response, "ライブラリ項目の取得");
-                var collection = DeserializeBody<SharePointCollection<SharePointListItemInfo>>(
-                    response,
-                    "ライブラリ項目の取得");
-                items.AddRange(collection.Items);
-                progress?.Report(items.Count);
-                next = ResolveNextLink(page, collection.NextLink);
-            }
-
-            return items;
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or InvalidDataException)
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
     /// Runs a read against the path form of a resource and, if that is rejected, against its
     /// unique id. A name that cannot be round-tripped through a URL, or a path that is simply
     /// too long, fails before the OData layer ever sees it; the id form is short and carries
@@ -252,7 +189,7 @@ internal sealed class SharePointWebSession : IDisposable
         try
         {
             return await GetSingleAsync<SharePointVersioningInfo>(
-                BuildApiUri("web/DefaultDocumentLibrary?$select=EnableVersioning,EnableMinorVersions"),
+                BuildApiUri("web/DefaultDocumentLibrary?$select=EnableVersioning"),
                 "ライブラリのバージョン設定の取得",
                 cancellationToken);
         }
@@ -265,42 +202,6 @@ internal sealed class SharePointWebSession : IDisposable
             ResetThrottleState();
             return new SharePointVersioningInfo();
         }
-    }
-
-    /// <summary>
-    /// Reads one folder: its files with their version history, and its subfolders.
-    /// The two collections are fetched concurrently; the shared request gate keeps the
-    /// total number of in-flight requests bounded.
-    /// </summary>
-    public async Task<SharePointFolderContents> GetFolderContentsAsync(
-        SharePointFolderInfo folder,
-        SharePointVersioningInfo versioning,
-        CancellationToken cancellationToken)
-    {
-        EnsureVerified();
-        ArgumentNullException.ThrowIfNull(folder);
-        ArgumentNullException.ThrowIfNull(versioning);
-
-        var byPath = FolderResource(folder.Path);
-        var byId = folder.UniqueId == Guid.Empty ? null : FolderResourceById(folder.UniqueId);
-
-        var filesTask = ReadWithIdFallbackAsync(
-            resource => GetFilesWithVersionsAsync(resource, versioning, cancellationToken),
-            byPath,
-            byId);
-        var foldersTask = ReadWithIdFallbackAsync(
-            resource => GetCollectionAsync<SharePointFolderInfo>(
-                BuildApiUri($"{resource}/Folders"),
-                "サブフォルダーの取得",
-                cancellationToken),
-            byPath,
-            byId);
-
-        await Task.WhenAll(filesTask, foldersTask);
-        return new SharePointFolderContents(
-            folder.Path,
-            await filesTask,
-            await foldersTask);
     }
 
     /// <summary>
@@ -393,71 +294,6 @@ internal sealed class SharePointWebSession : IDisposable
         // _requestGate is deliberately not disposed: its AvailableWaitHandle is never used,
         // so disposal buys nothing and would make the Release in an in-flight SendAsync throw.
         _signInForm.Dispose();
-    }
-
-    /// <summary>
-    /// Lists a folder's files together with their versions.
-    /// The history is always read from each file's own paged Versions collection. An inlined
-    /// <c>$expand=Versions</c> would be one round trip fewer, but a server-truncated inline
-    /// collection is indistinguishable from a complete one, and under-reporting history is
-    /// exactly the failure this tool must not have.
-    /// </summary>
-    private async Task<IReadOnlyList<SharePointFileProbe>> GetFilesWithVersionsAsync(
-        string folder,
-        SharePointVersioningInfo versioning,
-        CancellationToken cancellationToken)
-    {
-        // No $select: the default projection already carries every field the scan needs, and
-        // it cannot fail over a property name the tenant's SharePoint build does not expose.
-        var files = await GetCollectionAsync<SharePointFileInfo>(
-            BuildApiUri($"{folder}/Files"),
-            "ファイル一覧の取得",
-            cancellationToken);
-
-        // Started in batches rather than all at once: only a few requests can be in flight
-        // anyway, and a folder with tens of thousands of files would otherwise allocate one
-        // pending task per file up front.
-        var probes = new List<SharePointFileProbe>(files.Count);
-        foreach (var batch in files.Chunk(ProbeBatchSize))
-        {
-            probes.AddRange(await Task.WhenAll(
-                batch.Select(file => ProbeAsync(file, versioning, cancellationToken))));
-        }
-
-        return probes;
-    }
-
-    /// <summary>
-    /// Attaches the history to a listed file. A failure is reported on the probe instead of
-    /// failing the folder, so one unreadable file cannot hide the rest of the library
-    /// (NFR-REL-003), and it is never mistaken for a file without history.
-    /// </summary>
-    private async Task<SharePointFileProbe> ProbeAsync(
-        SharePointFileInfo file,
-        SharePointVersioningInfo versioning,
-        CancellationToken cancellationToken)
-    {
-        // Skipping a request the library's own settings prove would return nothing is what
-        // keeps a 40,000 file scan from being 40,000 requests.
-        if (!versioning.MayHaveHistory(file))
-        {
-            return new SharePointFileProbe(file, []);
-        }
-
-        try
-        {
-            return new SharePointFileProbe(
-                file,
-                await ReadWithIdFallbackAsync(
-                    resource => ReadVersionsAsync(resource, cancellationToken),
-                    FileResource(file.Path),
-                    file.UniqueId == Guid.Empty ? null : FileResourceById(file.UniqueId)));
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or
-            InvalidDataException or JsonException or TimeoutException)
-        {
-            return new SharePointFileProbe(file, [], exception.Message);
-        }
     }
 
     private Task<IReadOnlyList<SharePointFileVersionInfo>> GetVersionsAsync(
@@ -848,14 +684,8 @@ internal sealed class SharePointWebSession : IDisposable
     private static string FileResource(string serverRelativePath) =>
         $"web/GetFileByServerRelativePath(decodedUrl='{EncodeODataString(serverRelativePath)}')";
 
-    private static string FolderResource(string serverRelativePath) =>
-        $"web/GetFolderByServerRelativePath(decodedUrl='{EncodeODataString(serverRelativePath)}')";
-
     private static string FileResourceById(Guid uniqueId) =>
         $"web/GetFileById('{uniqueId:D}')";
-
-    private static string FolderResourceById(Guid uniqueId) =>
-        $"web/GetFolderById('{uniqueId:D}')";
 
     private Uri BuildApiUri(string relative)
     {

@@ -504,7 +504,8 @@ DELETE
 
 ### FR-DELETE-007
 
-1回の実行で削除できる件数に上限を設ける。
+1回の実行で削除する件数に上限は設けない。表で選択された対象をすべて処理する。
+実行前の確認ダイアログに件数を表示し、そこを歯止めとする。
 
 ### FR-DELETE-008
 
@@ -883,11 +884,12 @@ public sealed class VersionEntry
 ```csharp
 public sealed class RetentionPolicy
 {
-    public int KeepLatestVersions { get; init; } = 10;
-    public int KeepDays { get; init; } = 30;
+    public int KeepLatestVersions { get; init; }
+    public int KeepDays { get; init; }
     public int ProtectRecentlyModifiedFileDays { get; init; } = 7;
-    public long MinimumHistoryBytes { get; init; } = 10L * 1024 * 1024;
-    public int MaximumDeletesPerRun { get; init; } = 100;
+    public long MinimumHistoryBytes { get; init; } = 200L * 1024 * 1024;
+    public long MinimumCurrentFileBytes { get; init; } = 50L * 1024 * 1024;
+    public int MinimumPreviousVersionCount { get; init; }
 }
 ```
 
@@ -1096,12 +1098,11 @@ OneDrive 管理画面のストレージ使用量とは、次の理由で一致�
 ```json
 {
   "TargetPath": "C:\\Users\\UserName\\OneDrive - Organization",
-  "KeepLatestVersions": 10,
-  "KeepDays": 30,
+  "KeepLatestVersions": 0,
+  "KeepDays": 0,
   "ProtectRecentlyModifiedFileDays": 7,
-  "MinimumHistorySizeMB": 10,
+  "MinimumHistorySizeMB": 200,
   "MinimumFileSizeMB": 50,
-  "MaximumDeletesPerRun": 100,
   "MaxConcurrency": 3,
   "RetryCount": 5,
   "DryRun": true,

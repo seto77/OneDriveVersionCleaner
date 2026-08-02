@@ -10,9 +10,19 @@ internal sealed record VersionDeletionProgress(
     string CloudPath,
     string VersionLabel);
 
+/// <summary>
+/// The state of one file as this run last observed it: what the service reported, and the
+/// local sample taken at that same moment. They travel together so a caller never has to go
+/// back to disk for a timestamp this run already read, nor pair a probe with a sample taken
+/// at some other time.
+/// </summary>
+internal sealed record RefreshedFile(
+    SharePointFileProbe Probe,
+    LocalFileFingerprint LocalFile);
+
 internal sealed record VersionDeletionRunOutput(
     DeletionRunResult Result,
-    IReadOnlyDictionary<string, SharePointFileProbe> RefreshedFiles);
+    IReadOnlyDictionary<string, RefreshedFile> RefreshedFiles);
 
 /// <summary>
 /// Executes a <see cref="VersionDeletionPlan"/> against the signed-in SharePoint session.
@@ -35,7 +45,7 @@ internal sealed class VersionDeletionRunner(
         var startedAtUtc = DateTimeOffset.UtcNow;
         var outcomes = new List<VersionDeletionOutcome>(plan.VersionCount);
         var verifications = new List<FileDeletionVerification>(plan.FileCount);
-        var refreshed = new Dictionary<string, SharePointFileProbe>(StringComparer.Ordinal);
+        var refreshed = new Dictionary<string, RefreshedFile>(StringComparer.Ordinal);
         var totalCount = plan.VersionCount;
         var stopped = false;
         string? abortReason = null;
@@ -76,6 +86,13 @@ internal sealed class VersionDeletionRunner(
                     "走査時とは別のファイルがこの位置にあります。再度スキャンしてください。");
                 continue;
             }
+
+            // This read already is the file's authoritative state, so it is published before
+            // anything is recycled. Without it, a selection whose versions all turned out to be
+            // gone already would refresh nothing — the post-delete verification only runs when
+            // something was actually attempted — and those rows would stay on screen for ever,
+            // reporting "already in the recycle bin" every time they were selected again.
+            refreshed[file.File.ItemId] = new RefreshedFile(current, localBefore);
 
             // Sets, not a dictionary: a version id repeated across a page boundary must not
             // throw in the middle of a run that has already recycled something.
@@ -231,7 +248,7 @@ internal sealed class VersionDeletionRunner(
         string serverRelativePath,
         LocalFileFingerprint localBefore,
         IReadOnlyList<VersionDeletionOutcome> outcomes,
-        Dictionary<string, SharePointFileProbe> refreshed)
+        Dictionary<string, RefreshedFile> refreshed)
     {
         var localCheck = new LocalFileCheck(
             localBefore,
@@ -243,7 +260,10 @@ internal sealed class VersionDeletionRunner(
                 serverRelativePath,
                 UniqueIdOf(file.File),
                 CancellationToken.None);
-            refreshed[file.File.ItemId] = probe;
+
+            // Paired with the sample taken moments ago for this same check, so whoever records
+            // this file next does not have to read the timestamp off disk a third time.
+            refreshed[file.File.ItemId] = new RefreshedFile(probe, localCheck.After);
 
             var remainingIds = probe.Versions
                 .Where(version => !version.IsCurrentVersion)

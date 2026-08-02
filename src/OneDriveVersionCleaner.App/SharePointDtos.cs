@@ -26,36 +26,23 @@ internal sealed record SharePointResourcePath
 }
 
 /// <summary>
-/// The document library's versioning settings. They make it provable, rather than merely
-/// likely, that a given file has no history at all — which lets the scan skip its request.
+/// The document library's versioning settings. With versioning off, no file in the library can
+/// have history, so the whole scan can be skipped for the cost of reading this once.
 /// </summary>
 internal sealed record SharePointVersioningInfo
 {
     public bool EnableVersioning { get; init; } = true;
-
-    public bool EnableMinorVersions { get; init; } = true;
-
-    /// <summary>
-    /// True unless the library's settings rule out any previous version for this file.
-    /// With minor versions off, version 1.0 is the first version ever written, so nothing can
-    /// precede it. With minor versions on, drafts may precede 1.0, so no shortcut is taken.
-    /// </summary>
-    public bool MayHaveHistory(SharePointFileInfo file) =>
-        EnableVersioning &&
-        (EnableMinorVersions || file.MajorVersion > 1 || file.MinorVersion > 0);
 }
 
+/// <summary>
+/// A folder as the service reports it. Only the library root is read now that the scan finds
+/// its files locally, and only its path is used, so nothing else is modelled.
+/// </summary>
 internal sealed record SharePointFolderInfo
 {
-    public Guid UniqueId { get; init; }
-
-    public string Name { get; init; } = string.Empty;
-
     public string ServerRelativeUrl { get; init; } = string.Empty;
 
     public SharePointResourcePath? ServerRelativePath { get; init; }
-
-    public int ItemCount { get; init; }
 
     public string Path => string.IsNullOrEmpty(ServerRelativePath?.DecodedUrl)
         ? ServerRelativeUrl
@@ -86,53 +73,6 @@ internal sealed record SharePointFileInfo
     public string Path => string.IsNullOrEmpty(ServerRelativePath?.DecodedUrl)
         ? ServerRelativeUrl
         : ServerRelativePath.DecodedUrl;
-}
-
-/// <summary>
-/// One row of the document library's item list. A single paged query over this list covers
-/// the whole library, which is what makes a large scan affordable: the per-file version
-/// request is then only needed for the few files that actually carry history worth looking at.
-/// </summary>
-internal sealed record SharePointListItemInfo
-{
-    /// <summary>0 for a file, 1 for a folder.</summary>
-    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
-    public int FSObjType { get; init; }
-
-    /// <summary>Server-relative path of the item.</summary>
-    public string FileRef { get; init; } = string.Empty;
-
-    public string FileLeafRef { get; init; } = string.Empty;
-
-    /// <summary>Current file size. Absent on some deployments.</summary>
-    [JsonPropertyName("File_x0020_Size")]
-    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
-    public long? FileSize { get; init; }
-
-    /// <summary>
-    /// Total bytes of every version of the file. The whole point of this query: it exposes
-    /// history size without asking for the version list.
-    /// </summary>
-    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
-    public long? SMTotalFileStreamSize { get; init; }
-
-    public DateTimeOffset? Modified { get; init; }
-
-    /// <summary>Current version label, for example <c>3.0</c>.</summary>
-    public string UIVersionString { get; init; } = string.Empty;
-
-    public bool IsFile => FSObjType == 0;
-
-    /// <summary>
-    /// Bytes held by previous versions, or null when the service did not report the total.
-    /// Never negative: a total that is smaller than the current size means the figures are not
-    /// comparable, and guessing would be worse than admitting the value is unknown.
-    /// </summary>
-    public long? EstimatedHistoryBytes => SMTotalFileStreamSize is not { } total
-        ? null
-        : FileSize is not { } current
-            ? total
-            : total > current ? total - current : 0;
 }
 
 internal sealed record SharePointFileVersionInfo
@@ -209,8 +149,3 @@ internal sealed record SharePointFileProbe(
     SharePointFileInfo File,
     IReadOnlyList<SharePointFileVersionInfo> Versions,
     string? Error = null);
-
-internal sealed record SharePointFolderContents(
-    string Path,
-    IReadOnlyList<SharePointFileProbe> Files,
-    IReadOnlyList<SharePointFolderInfo> Folders);

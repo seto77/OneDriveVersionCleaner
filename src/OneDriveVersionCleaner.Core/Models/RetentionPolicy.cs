@@ -33,6 +33,4 @@ public sealed record RetentionPolicy
     public long MinimumCurrentFileBytes { get; init; } = 50L * 1024 * 1024;
 
     public int MinimumPreviousVersionCount { get; init; }
-
-    public int MaximumDeletesPerRun { get; init; } = 100;
 }

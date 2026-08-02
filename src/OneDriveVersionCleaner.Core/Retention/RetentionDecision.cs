@@ -6,7 +6,6 @@ public enum RetentionDisposition
 {
     Keep,
     DeleteCandidate,
-    DeferredByRunLimit,
 }
 
 public enum RetentionReason
@@ -28,7 +27,6 @@ public enum RetentionReason
     KeptByAge,
     KeptByExplicitDate,
     EligibleForDeletion,
-    MaximumDeletesPerRunReached,
 }
 
 public sealed record VersionRetentionDecision(
@@ -56,9 +54,6 @@ public sealed record RetentionEvaluationResult(
 
     public IReadOnlyList<VersionRetentionDecision> DeleteCandidates =>
         Decisions.Where(decision => decision.IsDeleteCandidate).ToArray();
-
-    public int DeferredDeleteCount =>
-        Decisions.Count(decision => decision.Disposition == RetentionDisposition.DeferredByRunLimit);
 
     public long KnownReclaimableBytes => DeleteCandidates.Aggregate(
         0L,

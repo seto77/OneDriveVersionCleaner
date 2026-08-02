@@ -53,8 +53,7 @@ internal static class TestData
         int protectDays = 0,
         long minimumHistoryBytes = 0,
         long minimumFileBytes = 0,
-        int minimumVersionCount = 0,
-        int maximumDeletes = 100) => new()
+        int minimumVersionCount = 0) => new()
         {
             KeepLatestVersions = keepLatest,
             KeepDays = keepDays,
@@ -62,6 +61,5 @@ internal static class TestData
             MinimumHistoryBytes = minimumHistoryBytes,
             MinimumCurrentFileBytes = minimumFileBytes,
             MinimumPreviousVersionCount = minimumVersionCount,
-            MaximumDeletesPerRun = maximumDeletes,
         };
 }

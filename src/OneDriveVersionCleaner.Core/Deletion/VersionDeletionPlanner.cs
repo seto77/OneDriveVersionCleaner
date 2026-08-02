@@ -8,22 +8,18 @@ namespace OneDriveVersionCleaner.Core.Deletion;
 public sealed class VersionDeletionPlanner
 {
     /// <summary>
-    /// Builds the plan for <paramref name="selection"/>, capped at
-    /// <paramref name="maximumVersions"/> per run (FR-DELETE-007).
-    /// The cap keeps the largest versions, because reclaiming space is the point of a run;
-    /// within a file the oldest version still goes first, so an interrupted run leaves the
+    /// Builds the plan for <paramref name="selection"/>. Everything selected is planned: the
+    /// selection is the user's, and the confirmation dialog states its size before anything is
+    /// touched. Within a file the oldest version goes first, so an interrupted run leaves the
     /// newest history intact (FR-DELETE-004).
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// A current version, or a version the API already marked undeletable, reached the
     /// selection. That is a defect upstream, so the run is refused rather than trimmed.
     /// </exception>
-    public VersionDeletionPlan Create(
-        IEnumerable<PlannedVersionDeletion> selection,
-        int maximumVersions)
+    public VersionDeletionPlan Create(IEnumerable<PlannedVersionDeletion> selection)
     {
         ArgumentNullException.ThrowIfNull(selection);
-        ArgumentOutOfRangeException.ThrowIfNegative(maximumVersions);
 
         var seen = new HashSet<(string ItemId, string VersionId)>();
         var candidates = new List<PlannedVersionDeletion>();
@@ -37,14 +33,7 @@ public sealed class VersionDeletionPlanner
             }
         }
 
-        var admitted = candidates
-            .OrderByDescending(candidate => candidate.Version.Size ?? -1)
-            .ThenBy(candidate => candidate.Version.Created ?? DateTimeOffset.MaxValue)
-            .ThenBy(candidate => candidate.Version.VersionId, StringComparer.Ordinal)
-            .Take(maximumVersions)
-            .ToArray();
-
-        var files = admitted
+        var files = candidates
             .GroupBy(candidate => candidate.File)
             .Select(group => new PlannedFileDeletion(
                 group.Key,
@@ -57,7 +46,7 @@ public sealed class VersionDeletionPlanner
             .ThenBy(file => file.File.ItemId, StringComparer.Ordinal)
             .ToArray();
 
-        return new VersionDeletionPlan(files, candidates.Count - admitted.Length);
+        return new VersionDeletionPlan(files);
     }
 
     private static void Guard(FileEntry file, VersionEntry version)

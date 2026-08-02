@@ -57,7 +57,6 @@ public sealed class DeletionAuditLog(string? directory = null)
                     policy.ProtectRecentlyModifiedFileDays,
                     policy.MinimumHistoryBytes,
                     policy.MinimumPreviousVersionCount,
-                    policy.MaximumDeletesPerRun,
                     KeepCreatedOnOrAfter = Invariant(policy.KeepCreatedOnOrAfter),
                 },
             }),

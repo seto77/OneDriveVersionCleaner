@@ -289,44 +289,6 @@ public sealed class RetentionPolicyEvaluatorTests
     }
 
     [Fact]
-    public void MaximumDeletes_IsGlobalAndSelectsOldestFirst()
-    {
-        var newerFile = TestData.File(TestData.Version("newer", 50)) with
-        {
-            ItemId = "item-newer",
-            CloudPath = "newer.txt",
-        };
-        var olderFile = TestData.File(TestData.Version("older", 100)) with
-        {
-            ItemId = "item-older",
-            CloudPath = "older.txt",
-        };
-
-        var result = _sut.Evaluate(
-            [newerFile, olderFile],
-            TestData.Policy(maximumDeletes: 1),
-            TestData.Now);
-
-        Assert.Equal("older", Assert.Single(result.DeleteCandidates).Version.VersionId);
-        Assert.Equal(1, result.DeferredDeleteCount);
-        Assert.Equal(
-            RetentionDisposition.DeferredByRunLimit,
-            Decision(result, "newer").Disposition);
-    }
-
-    [Fact]
-    public void ZeroMaximumDeletes_DefersEveryEligibleVersion()
-    {
-        var result = _sut.Evaluate(
-            TestData.File(TestData.Version("old", 100)),
-            TestData.Policy(maximumDeletes: 0),
-            TestData.Now);
-
-        Assert.Empty(result.DeleteCandidates);
-        Assert.Equal(1, result.DeferredDeleteCount);
-    }
-
-    [Fact]
     public void SameTimestampAtCountBoundary_IsKeptConservatively()
     {
         var first = TestData.Version("a", 10);

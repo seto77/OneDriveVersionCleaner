@@ -55,9 +55,6 @@ internal sealed partial class DeleteConfirmationForm : Form
         var unknownSuffix = plan.UnknownSizeCount == 0
             ? ""
             : $"（サイズ不明 {plan.UnknownSizeCount:N0}件を除く）";
-        var deferredLine = plan.DeferredVersionCount == 0
-            ? ""
-            : $"\r\n1回の上限を超えるため見送る過去版: {plan.DeferredVersionCount:N0}件";
         var protectedLine = policyProtectedCount == 0
             ? ""
             : $"\r\n現在の保持条件では残る対象を {policyProtectedCount:N0}件 含みます。";
@@ -65,7 +62,6 @@ internal sealed partial class DeleteConfirmationForm : Form
         return
             $"過去バージョン {plan.VersionCount:N0}件（{plan.FileCount:N0}ファイル）をごみ箱へ移動します。\r\n" +
             $"削減見込み容量: {ByteSizeFormatter.Format(plan.KnownReclaimableBytes)}{unknownSuffix}" +
-            deferredLine +
             protectedLine;
     }
 

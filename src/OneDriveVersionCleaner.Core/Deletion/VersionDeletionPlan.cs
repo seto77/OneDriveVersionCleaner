@@ -26,9 +26,7 @@ public sealed record PlannedFileDeletion(FileEntry File, IReadOnlyList<VersionEn
 /// Files stay grouped so that a caller resolves each file once, and versions run oldest
 /// first within a file.
 /// </summary>
-public sealed record VersionDeletionPlan(
-    IReadOnlyList<PlannedFileDeletion> Files,
-    int DeferredVersionCount)
+public sealed record VersionDeletionPlan(IReadOnlyList<PlannedFileDeletion> Files)
 {
     public IReadOnlyList<PlannedVersionDeletion> Versions => Files
         .SelectMany(file => file.Versions.Select(version => new PlannedVersionDeletion(file.File, version)))

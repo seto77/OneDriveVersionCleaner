@@ -1,17 +1,13 @@
 using System.Globalization;
 using System.Text.Json;
 using OneDriveVersionCleaner.Core.Caching;
-using OneDriveVersionCleaner.Core.Deletion;
 using OneDriveVersionCleaner.Core.Models;
+using OneDriveVersionCleaner.Core.Scanning;
 using OneDriveVersionCleaner.Infrastructure.OneDriveAccounts;
 
 namespace OneDriveVersionCleaner.App;
 
-internal sealed record ScanProgress(
-    int FoldersCompleted,
-    int FoldersDiscovered,
-    int FilesFound,
-    string CurrentFolder);
+internal sealed record ScanProgress(int Completed, int Total);
 
 /// <summary>
 /// A scanned file together with the address needed to act on it again.
@@ -20,16 +16,24 @@ internal sealed record ScanProgress(
 /// When this file's versions were read from the service. Carried over unchanged for a reused
 /// answer, so reusing it does not keep resetting its age and postponing the next refresh.
 /// </param>
+/// <param name="LocalLastWriteUtc">
+/// The synced copy's write time at that moment. This is what a later run compares against to
+/// decide whether the file has to be asked about again.
+/// </param>
 internal sealed record ScannedFile(
     FileEntry Entry,
     string ServerRelativePath,
-    DateTimeOffset QueriedAtUtc);
+    DateTimeOffset QueriedAtUtc,
+    DateTimeOffset? LocalLastWriteUtc);
 
+/// <summary>
+/// What the scan did. The survey's own figures are not repeated here: the caller still holds
+/// the <see cref="LocalSurveyResult"/> it passed in, and one source for a number is enough.
+/// </summary>
 internal sealed record ScanResult(
     IReadOnlyList<ScannedFile> Files,
-    IReadOnlyList<string> FolderErrors,
-    bool UsedBulkListing = false,
-    int DetailedFileCount = 0,
+    IReadOnlyList<string> Errors,
+    int QueriedFileCount = 0,
     int ReusedFromCacheCount = 0);
 
 /// <summary>
@@ -44,114 +48,86 @@ internal sealed record VersionCacheOptions(
 }
 
 /// <summary>
-/// Asked before the per-file phase starts, with the number of files that would be read one by
-/// one. Returning false ends the scan with what the bulk phase already produced.
+/// Asked before any version request goes out, with the number of files that would be read one
+/// by one. Returning false ends the scan with what the cache already provided.
 /// </summary>
-internal delegate bool ConfirmDetailPhase(int fileCount, long thresholdBytes);
+internal delegate bool ConfirmVersionQuery(int fileCount);
 
 /// <summary>
-/// Walks the personal document library breadth first. Every folder on a level is read
-/// concurrently; the session's request gate bounds how many requests are actually in flight.
+/// Reads version history for files the local survey already selected.
+/// The service is never asked to enumerate anything: the set of files is decided locally, so
+/// the request count is known before the first request and is bounded by the size threshold
+/// rather than by the size of the library.
 /// </summary>
 internal sealed class OneDriveScanner(
     SharePointWebSession session,
     OneDriveBusinessAccount account,
-    string libraryRoot,
-    SharePointVersioningInfo versioning)
+    string libraryRoot)
 {
-    /// <summary>
-    /// SharePoint keeps list forms in a folder of this name. It holds no user content.
-    /// </summary>
-    private const string SystemFolderName = "Forms";
-
-    /// <summary>How many per-file reads are started at once during the detail phase.</summary>
-    private const int DetailBatchSize = 32;
+    /// <summary>How many per-file reads are started at once.</summary>
+    private const int QueryBatchSize = 32;
 
     /// <summary>
-    /// Scans by reading the library's item list once and then asking for version detail only
-    /// where the reported history is large enough to matter. Falls back to walking folders
-    /// when the item list is unavailable.
+    /// Asks the service for the history of every surveyed file that the cache cannot answer for.
     /// </summary>
-    public async Task<ScanResult> ScanBulkAsync(
-        string rootServerRelativePath,
-        long minimumHistoryBytes,
-        long minimumCurrentFileBytes,
+    public async Task<ScanResult> ScanAsync(
+        LocalSurveyResult survey,
         VersionCacheOptions cache,
-        ConfirmDetailPhase confirmDetailPhase,
+        ConfirmVersionQuery confirmQuery,
         IProgress<ScanProgress>? progress,
         CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(rootServerRelativePath);
+        ArgumentNullException.ThrowIfNull(survey);
         ArgumentNullException.ThrowIfNull(cache);
-        ArgumentNullException.ThrowIfNull(confirmDetailPhase);
+        ArgumentNullException.ThrowIfNull(confirmQuery);
 
-        var listProgress = new Progress<int>(count =>
-            progress?.Report(new ScanProgress(0, 0, count, "ライブラリ項目を取得しています")));
-        var items = await session.TryEnumerateLibraryItemsAsync(listProgress, cancellationToken);
-        if (items is null)
-        {
-            return await ScanAsync(
-                new SharePointFolderInfo { ServerRelativeUrl = rootServerRelativePath },
-                progress,
-                cancellationToken);
-        }
-
-        var prefix = rootServerRelativePath.TrimEnd('/') + "/";
-        var files = items
-            .Where(item => item.IsFile &&
-                item.FileRef.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        // Only files that can hold history, are large enough to be worth reclaiming, and whose
-        // reported history clears the threshold, are worth a request each. An unreported total
-        // counts as "unknown", never as "none".
-        var inScope = files
-            .Where(item => HasHistory(item) &&
-                ClearsFileSize(item, minimumCurrentFileBytes) &&
-                (item.EstimatedHistoryBytes is not { } bytes || bytes >= minimumHistoryBytes))
-            .ToArray();
-
-        // Anything already answered for stays out of the request budget until the file both
-        // changes and the answer has aged past the configured interval.
+        // Anything already answered for stays out of the request budget until the local copy
+        // both changes and the answer has aged past the configured interval.
+        var cachedByLocalPath = BuildCacheIndex(cache);
+        var now = DateTimeOffset.UtcNow;
         var reused = new List<ScannedFile>();
-        var detailed = new List<SharePointListItemInfo>(inScope.Length);
-        foreach (var item in inScope)
+        var toQuery = new List<LocalCandidateFile>(survey.Candidates.Count);
+        foreach (var candidate in survey.Candidates)
         {
-            var cached = FindCached(cache, item);
-            if (VersionCachePolicy.ShouldRequery(cached, item.Modified, DateTimeOffset.UtcNow, cache.MinimumAge))
+            var cached = cachedByLocalPath.GetValueOrDefault(candidate.LocalPath);
+            if (VersionCachePolicy.ShouldRequery(
+                    cached,
+                    candidate.LastWriteTimeUtc,
+                    now,
+                    cache.MinimumAge))
             {
-                detailed.Add(item);
+                toQuery.Add(candidate);
             }
             else
             {
                 reused.Add(new ScannedFile(
                     ToFileEntry(cached!),
                     cached!.ServerRelativePath,
-                    cached.QueriedAtUtc));
+                    cached.QueriedAtUtc,
+                    cached.LocalLastWriteUtc));
             }
         }
 
-        if (detailed.Count > 0 && !confirmDetailPhase(detailed.Count, minimumHistoryBytes))
+        if (toQuery.Count > 0 && !confirmQuery(toQuery.Count))
         {
             return new ScanResult(
                 reused,
                 [],
-                UsedBulkListing: true,
-                DetailedFileCount: 0,
+                QueriedFileCount: 0,
                 ReusedFromCacheCount: reused.Count);
         }
 
-        var scanned = new List<ScannedFile>(detailed.Count + reused.Count);
+        var scanned = new List<ScannedFile>(survey.Candidates.Count);
         scanned.AddRange(reused);
         var errors = new List<string>();
         var completed = 0;
-        foreach (var batch in detailed.Chunk(DetailBatchSize))
+        foreach (var batch in toQuery.Chunk(QueryBatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var probes = await Task.WhenAll(batch.Select(item =>
-                ReadFileAsync(item, cancellationToken)));
+            var probes = await Task.WhenAll(batch.Select(candidate =>
+                ReadFileAsync(candidate, cancellationToken)));
 
-            foreach (var (probe, error) in probes)
+            foreach (var (candidate, probe, error) in probes)
             {
                 if (error is not null)
                 {
@@ -160,35 +136,36 @@ internal sealed class OneDriveScanner(
                 }
 
                 scanned.Add(new ScannedFile(
-                    CreateEntry(account, libraryRoot, probe!),
+                    CreateEntry(account, libraryRoot, probe!, candidate.LocalPath),
                     probe!.File.Path,
-                    DateTimeOffset.UtcNow));
+                    DateTimeOffset.UtcNow,
+                    candidate.LastWriteTimeUtc));
             }
 
             completed += batch.Length;
-            progress?.Report(new ScanProgress(
-                completed,
-                detailed.Count,
-                scanned.Count,
-                "バージョン履歴を取得しています"));
+            progress?.Report(new ScanProgress(completed, toQuery.Count));
         }
 
         return new ScanResult(
             scanned,
             errors,
-            UsedBulkListing: true,
-            DetailedFileCount: detailed.Count,
+            QueriedFileCount: toQuery.Count,
             ReusedFromCacheCount: reused.Count);
     }
 
     /// <summary>
-    /// Finds the earlier answer for a listed item. The cache is keyed by item id, but the bulk
-    /// listing does not carry one, so the server-relative path is what ties the two together.
+    /// Indexes the cache by local path, which is what the survey produces. The cache is keyed
+    /// by item id, and two entries can name the same local path once a file has been replaced,
+    /// so the most recently queried one wins.
     /// </summary>
-    private static CachedFileVersions? FindCached(
-        VersionCacheOptions cache,
-        SharePointListItemInfo item) => cache.Entries.Values.FirstOrDefault(entry =>
-        string.Equals(entry.ServerRelativePath, item.FileRef, StringComparison.OrdinalIgnoreCase));
+    private static Dictionary<string, CachedFileVersions> BuildCacheIndex(VersionCacheOptions cache) =>
+        cache.Entries.Values
+            .Where(entry => !string.IsNullOrEmpty(entry.LocalPath))
+            .GroupBy(entry => entry.LocalPath, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.MaxBy(entry => entry.QueriedAtUtc)!,
+                StringComparer.OrdinalIgnoreCase);
 
     private static FileEntry ToFileEntry(CachedFileVersions cached) => new()
     {
@@ -216,134 +193,57 @@ internal sealed class OneDriveScanner(
         WebUrl = file.Entry.WebUrl,
         QueriedAtUtc = file.QueriedAtUtc.ToUniversalTime(),
         FileLastModified = file.Entry.LastModified,
+        LocalLastWriteUtc = file.LocalLastWriteUtc,
         CurrentSize = file.Entry.CurrentSize,
         Versions = file.Entry.Versions,
     };
 
     /// <summary>
-    /// True when the file is large enough to be worth asking about. The size comes from the
-    /// local sync folder first: reading it costs nothing and does not touch the service.
-    /// Placeholders of online-only files still report their real length. A size that cannot be
-    /// established anywhere keeps the file in scope rather than dropping it silently.
+    /// One unreadable file must not abort the scan, so its failure is collected and the
+    /// remaining files continue (NFR-REL-003). A file that exists locally but not on the
+    /// service arrives here as a failed read, which is exactly what it is.
     /// </summary>
-    private bool ClearsFileSize(SharePointListItemInfo item, long minimumBytes)
-    {
-        if (minimumBytes <= 0)
-        {
-            return true;
-        }
-
-        var localPath = ToLocalPath(account.UserFolder, ToCloudRelativePath(libraryRoot, item.FileRef));
-        var localSize = LocalFileFingerprint.Capture(localPath);
-        if (localSize is { Exists: true, Length: { } length })
-        {
-            return length >= minimumBytes;
-        }
-
-        return item.FileSize is not { } reported || reported >= minimumBytes;
-    }
-
-    /// <summary>
-    /// True unless the version label rules out any previous version. <c>1.0</c> is the first
-    /// version ever written when minor versions are off; with them on, drafts may precede it.
-    /// </summary>
-    private bool HasHistory(SharePointListItemInfo item) =>
-        versioning.EnableVersioning &&
-        (versioning.EnableMinorVersions ||
-            !string.Equals(item.UIVersionString, "1.0", StringComparison.Ordinal));
-
-    public async Task<ScanResult> ScanAsync(
-        SharePointFolderInfo root,
-        IProgress<ScanProgress>? progress,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(root);
-
-        var files = new List<ScannedFile>();
-        var errors = new List<string>();
-        var level = new List<SharePointFolderInfo> { root };
-        var discovered = 1;
-        var completed = 0;
-
-        while (level.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report(new ScanProgress(completed, discovered, files.Count, level[0].Path));
-
-            var contents = await Task.WhenAll(level.Select(folder =>
-                ReadFolderAsync(folder, cancellationToken)));
-
-            var next = new List<SharePointFolderInfo>();
-            foreach (var (folder, error) in contents)
-            {
-                completed++;
-                if (error is not null)
-                {
-                    errors.Add(error);
-                    continue;
-                }
-
-                files.AddRange(folder!.Files.Select(probe => new ScannedFile(
-                    CreateEntry(account, libraryRoot, probe),
-                    probe.File.Path,
-                    DateTimeOffset.UtcNow)));
-                next.AddRange(folder.Folders.Where(IsScannable));
-            }
-
-            discovered += next.Count;
-            progress?.Report(new ScanProgress(completed, discovered, files.Count, string.Empty));
-            level = next;
-        }
-
-        return new ScanResult(files, errors);
-    }
-
-    /// <summary>
-    /// One unreadable file must not abort the detail phase, so its failure is collected and
-    /// the remaining files continue (NFR-REL-003).
-    /// </summary>
-    private async Task<(SharePointFileProbe? Probe, string? Error)> ReadFileAsync(
-        SharePointListItemInfo item,
+    private async Task<(LocalCandidateFile Candidate, SharePointFileProbe? Probe, string? Error)> ReadFileAsync(
+        LocalCandidateFile candidate,
         CancellationToken cancellationToken)
     {
         try
         {
-            return (await session.GetFileVersionsAsync(item.FileRef, Guid.Empty, cancellationToken), null);
+            var probe = await session.GetFileVersionsAsync(
+                ToServerRelativePath(candidate.CloudRelativePath),
+                Guid.Empty,
+                cancellationToken);
+            return (candidate, probe, null);
         }
         catch (Exception exception) when (exception is InvalidOperationException or
             InvalidDataException or JsonException or TimeoutException)
         {
-            return (null, $"{item.FileRef}: {exception.Message}");
+            return (candidate, null, $"{candidate.CloudRelativePath}: {exception.Message}");
         }
     }
 
-    /// <summary>
-    /// One unreadable folder must not abort the whole library (NFR-REL-003), so failures are
-    /// collected and the walk continues with the folders that did respond.
-    /// </summary>
-    private async Task<(SharePointFolderContents? Contents, string? Error)> ReadFolderAsync(
-        SharePointFolderInfo folder,
-        CancellationToken cancellationToken)
+    private string ToServerRelativePath(string cloudRelativePath)
     {
-        try
-        {
-            return (await session.GetFolderContentsAsync(folder, versioning, cancellationToken), null);
-        }
-        catch (Exception exception) when (exception is InvalidOperationException or
-            InvalidDataException or JsonException or TimeoutException)
-        {
-            return (null, $"{folder.Path}: {exception.Message}");
-        }
+        var root = libraryRoot.TrimEnd('/');
+        return cloudRelativePath.Length == 0 ? root : $"{root}/{cloudRelativePath}";
     }
 
     /// <summary>
     /// Builds the domain entry for a probed file. The current version is synthesised from
     /// the file itself, because SharePoint's version collection holds only historical ones.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="localPath"/> is the path the local walk actually observed. It is passed
+    /// in rather than rebuilt from the server path because the version cache is keyed by it: a
+    /// key written by one path builder and looked up by another only has to normalise
+    /// differently once for every lookup to miss, which reads as a cold cache rather than as
+    /// the fault it is.
+    /// </remarks>
     public static FileEntry CreateEntry(
         OneDriveBusinessAccount account,
         string libraryRoot,
-        SharePointFileProbe probe)
+        SharePointFileProbe probe,
+        string localPath)
     {
         ArgumentNullException.ThrowIfNull(account);
         ArgumentNullException.ThrowIfNull(probe);
@@ -401,7 +301,7 @@ internal sealed class OneDriveScanner(
                 : probe.File.UniqueId.ToString("D"),
             Name = probe.File.Name,
             CloudPath = cloudPath,
-            LocalPath = ToLocalPath(account.UserFolder, cloudPath),
+            LocalPath = localPath,
             WebUrl = Uri.TryCreate(authority + probe.File.Path, UriKind.Absolute, out var webUrl)
                 ? webUrl.AbsoluteUri
                 : account.SiteUri.AbsoluteUri,
@@ -417,24 +317,11 @@ internal sealed class OneDriveScanner(
         };
     }
 
-    private static bool IsScannable(SharePointFolderInfo folder) =>
-        !string.Equals(folder.Name, SystemFolderName, StringComparison.OrdinalIgnoreCase) &&
-        !folder.Name.StartsWith('_') &&
-        !string.IsNullOrWhiteSpace(folder.Path);
-
     private static string ToCloudRelativePath(string libraryRoot, string serverRelativePath)
     {
         var root = libraryRoot.TrimEnd('/');
         return serverRelativePath.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase)
             ? serverRelativePath[(root.Length + 1)..]
             : serverRelativePath.TrimStart('/');
-    }
-
-    private static string ToLocalPath(string userFolder, string cloudRelativePath)
-    {
-        var segments = cloudRelativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return segments.Length == 0
-            ? userFolder
-            : Path.Combine([userFolder, .. segments]);
     }
 }

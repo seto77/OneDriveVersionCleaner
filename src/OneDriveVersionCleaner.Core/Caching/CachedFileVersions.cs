@@ -29,6 +29,13 @@ public sealed record CachedFileVersions
     /// <summary>The file's last modification as it stood when the versions were read.</summary>
     public DateTimeOffset? FileLastModified { get; init; }
 
+    /// <summary>
+    /// The synced local copy's write time when the versions were read. The local survey sees
+    /// this clock and not the service's, so reuse is decided against this field; null in an
+    /// entry written before the scan became local-first, which simply costs one request.
+    /// </summary>
+    public DateTimeOffset? LocalLastWriteUtc { get; init; }
+
     public long? CurrentSize { get; init; }
 
     public IReadOnlyList<VersionEntry> Versions { get; init; } = [];

@@ -12,7 +12,7 @@ public sealed class VersionDeletionPlannerTests
     {
         var file = TestData.File(TestData.Version("a", 400), TestData.Version("b", 500));
 
-        var plan = _sut.Create(Selection(file), 100);
+        var plan = _sut.Create(Selection(file));
 
         var planned = Assert.Single(plan.Files);
         Assert.Equal(2, planned.VersionCount);
@@ -28,7 +28,7 @@ public sealed class VersionDeletionPlannerTests
             TestData.Version("oldest", 900),
             TestData.Version("newest", 100));
 
-        var plan = _sut.Create(Selection(file), 100);
+        var plan = _sut.Create(Selection(file));
 
         Assert.Equal(
             ["oldest", "middle", "newest"],
@@ -42,40 +42,11 @@ public sealed class VersionDeletionPlannerTests
             TestData.Version("undated", 500) with { Created = null },
             TestData.Version("older", 900));
 
-        var plan = _sut.Create(Selection(file), 100);
+        var plan = _sut.Create(Selection(file));
 
         Assert.Equal(
             ["older", "undated"],
             plan.Files.Single().Versions.Select(version => version.VersionId));
-    }
-
-    [Fact]
-    public void Create_KeepsTheLargestVersionsWhenTheRunLimitIsReached()
-    {
-        var file = TestData.File(
-            TestData.Version("small", 400, size: 10),
-            TestData.Version("large", 500, size: 900),
-            TestData.Version("medium", 600, size: 100));
-
-        var plan = _sut.Create(Selection(file), 2);
-
-        Assert.Equal(2, plan.VersionCount);
-        Assert.Equal(1, plan.DeferredVersionCount);
-        Assert.Equal(
-            ["medium", "large"],
-            plan.Files.Single().Versions.Select(version => version.VersionId));
-    }
-
-    [Fact]
-    public void Create_TreatsUnknownSizesAsTheLowestPriorityForTheRunLimit()
-    {
-        var file = TestData.File(
-            TestData.Version("unknown", 400, size: null),
-            TestData.Version("known", 500, size: 1));
-
-        var plan = _sut.Create(Selection(file), 1);
-
-        Assert.Equal("known", plan.Files.Single().Versions.Single().VersionId);
     }
 
     [Fact]
@@ -84,10 +55,20 @@ public sealed class VersionDeletionPlannerTests
         var file = TestData.File(TestData.Version("a", 400));
         var duplicated = Selection(file).Concat(Selection(file));
 
-        var plan = _sut.Create(duplicated, 100);
+        Assert.Equal(1, _sut.Create(duplicated).VersionCount);
+    }
 
-        Assert.Equal(1, plan.VersionCount);
-        Assert.Equal(0, plan.DeferredVersionCount);
+    [Fact]
+    public void Create_PlansEveryVersionThatWasSelected()
+    {
+        var file = TestData.File(
+            TestData.Version("small", 400, size: 10),
+            TestData.Version("large", 500, size: 900),
+            TestData.Version("unknown", 600, size: null));
+
+        // Nothing is trimmed: the selection is the user's, and the confirmation dialog states
+        // its size before anything is touched.
+        Assert.Equal(3, _sut.Create(Selection(file)).VersionCount);
     }
 
     [Fact]
@@ -104,7 +85,7 @@ public sealed class VersionDeletionPlannerTests
             CloudPath = "Research/alpha.xlsx",
         };
 
-        var plan = _sut.Create([.. Selection(second), .. Selection(first)], 100);
+        var plan = _sut.Create([.. Selection(second), .. Selection(first)]);
 
         Assert.Equal(
             ["Research/alpha.xlsx", "Research/zeta.xlsx"],
@@ -114,7 +95,7 @@ public sealed class VersionDeletionPlannerTests
     [Fact]
     public void Create_ReturnsAnEmptyPlanForAnEmptySelection()
     {
-        var plan = _sut.Create([], 100);
+        var plan = _sut.Create([]);
 
         Assert.True(plan.IsEmpty);
         Assert.Empty(plan.Files);
@@ -129,7 +110,7 @@ public sealed class VersionDeletionPlannerTests
             TestData.Version("b", 500, size: 700),
             TestData.Version("c", 600, size: null));
 
-        var plan = _sut.Create(Selection(file), 100);
+        var plan = _sut.Create(Selection(file));
 
         Assert.Equal(1_000, plan.KnownReclaimableBytes);
         Assert.Equal(1, plan.UnknownSizeCount);
@@ -141,7 +122,7 @@ public sealed class VersionDeletionPlannerTests
         var file = TestData.File(TestData.Version("current", 0, isCurrent: true));
 
         var exception = Assert.Throws<InvalidOperationException>(
-            () => _sut.Create(Selection(file), 100));
+            () => _sut.Create(Selection(file)));
 
         Assert.Contains("current version", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -151,13 +132,7 @@ public sealed class VersionDeletionPlannerTests
     {
         var file = TestData.File(TestData.Version("locked", 400, canDelete: false));
 
-        Assert.Throws<InvalidOperationException>(() => _sut.Create(Selection(file), 100));
-    }
-
-    [Fact]
-    public void Create_RejectsANegativeRunLimit()
-    {
-        Assert.Throws<ArgumentOutOfRangeException>(() => _sut.Create([], -1));
+        Assert.Throws<InvalidOperationException>(() => _sut.Create(Selection(file)));
     }
 
     private static PlannedVersionDeletion[] Selection(FileEntry file) =>

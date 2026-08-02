@@ -16,6 +16,17 @@ public sealed record LocalFileFingerprint(
     /// </summary>
     public bool IsObserved => Exists && Error is null;
 
+    /// <summary>
+    /// Converts a file system write time the one way this codebase converts them.
+    /// The version cache decides whether a file needs another request by comparing a timestamp
+    /// recorded here against one the local survey recorded from a directory entry. The two are
+    /// tested for equality, so they have to be produced identically — kind and precision
+    /// included. Changing this on one side only would make every comparison fail silently, and
+    /// the cache would stop paying for itself with nothing to show that it had.
+    /// </summary>
+    public static DateTimeOffset ToUtcTimestamp(DateTime lastWriteTimeUtc) =>
+        new(lastWriteTimeUtc, TimeSpan.Zero);
+
     public static LocalFileFingerprint Capture(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -31,7 +42,7 @@ public sealed record LocalFileFingerprint(
                 ? new LocalFileFingerprint(
                     path,
                     true,
-                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero),
+                    ToUtcTimestamp(info.LastWriteTimeUtc),
                     info.Length,
                     null)
                 : new LocalFileFingerprint(path, false, null, null, null);

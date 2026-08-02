@@ -10,6 +10,7 @@ using OneDriveVersionCleaner.Core.Formatting;
 using OneDriveVersionCleaner.Core.Models;
 using OneDriveVersionCleaner.Core.Paths;
 using OneDriveVersionCleaner.Core.Retention;
+using OneDriveVersionCleaner.Core.Scanning;
 using OneDriveVersionCleaner.Infrastructure.OneDriveAccounts;
 
 namespace OneDriveVersionCleaner.App;
@@ -350,7 +351,6 @@ internal sealed partial class MainForm : Form
         SetNumber(_minimumHistoryInput, _settings.MinimumHistorySizeMB);
         SetNumber(_minimumFileSizeInput, _settings.MinimumFileSizeMB);
         SetNumber(_cacheAgeInput, _settings.VersionCacheMinimumAgeDays);
-        SetNumber(_maximumCandidatesInput, _settings.MaximumDeletesPerRun);
     }
 
     /// <summary>
@@ -478,23 +478,41 @@ internal sealed partial class MainForm : Form
             _statusLabel.Text = "OneDriveのドキュメントルートを確認しています...";
             var library = await session.GetDefaultDocumentLibraryRootAsync(cancellation.Token);
             var libraryRoot = library.Path;
-            var mapping = LocalPathMapper.Map(account.UserFolder, _targetBox.Text);
-
-            // Only the library root arrives with its unique id. A chosen subfolder is addressed
-            // by path for the first read; every folder below it comes from a listing that does
-            // carry an id, so the fallback is available from the second level down.
-            var scanRoot = mapping.CloudPathSegments.Count == 0
-                ? library
-                : new SharePointFolderInfo
-                {
-                    ServerRelativeUrl = CombineServerRelativePath(libraryRoot, mapping.CloudPathSegments),
-                };
 
             var versioning = await session.GetVersioningInfoAsync(cancellation.Token);
             session.ResetThrottleState();
+            if (!versioning.EnableVersioning)
+            {
+                _statusLabel.Text = "このライブラリはバージョン管理が無効です。";
+                MessageBox.Show(
+                    this,
+                    "このドキュメントライブラリはバージョン管理が無効です。\n" +
+                    "過去バージョンは存在しないため、走査は行いません。",
+                    "バージョン管理",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            // The local walk decides the whole request budget, and it costs nothing: no
+            // service call is made until the size threshold has already removed everything
+            // that cannot be worth a request. Run off the UI thread so a large sync folder
+            // does not freeze the form while it is counted.
+            var thresholdBytes = CreatePolicy().MinimumCurrentFileBytes;
+            var surveyProgress = new Progress<LocalSurveyProgress>(report => _statusLabel.Text =
+                $"ローカルを検索しています... 検査 {report.FilesExamined:N0}件 / " +
+                $"{ByteSizeFormatter.Format(thresholdBytes)}以上 {report.CandidatesFound:N0}件");
+            var survey = await Task.Run(
+                () => LocalFileSurvey.Run(
+                    account.UserFolder,
+                    _targetBox.Text,
+                    thresholdBytes,
+                    surveyProgress,
+                    cancellation.Token),
+                cancellation.Token);
+
             var progress = new Progress<ScanProgress>(report => _statusLabel.Text =
-                $"バージョン履歴を取得しています... フォルダー {report.FoldersCompleted:N0}/{report.FoldersDiscovered:N0} / " +
-                $"ファイル {report.FilesFound:N0}件");
+                $"バージョン履歴を取得しています... {report.Completed:N0}/{report.Total:N0}件");
 
             void OnThrottleWait(object? _, TimeSpan wait) => _statusLabel.Text =
                 $"SharePointの要求制限により あと {wait.TotalSeconds:N0} 秒待機しています...";
@@ -502,15 +520,13 @@ internal sealed partial class MainForm : Form
             ScanResult scanned;
             try
             {
-                scanned = await new OneDriveScanner(session, account, libraryRoot, versioning)
-                    .ScanBulkAsync(
-                        scanRoot.Path,
-                        CreatePolicy().MinimumHistoryBytes,
-                        CreatePolicy().MinimumCurrentFileBytes,
+                scanned = await new OneDriveScanner(session, account, libraryRoot)
+                    .ScanAsync(
+                        survey,
                         new VersionCacheOptions(
                             await _versionCache.LoadAsync(account.AccountKey, cancellation.Token),
                             TimeSpan.FromDays(decimal.ToDouble(_cacheAgeInput.Value))),
-                        ConfirmDetailPhase,
+                        count => ConfirmVersionQuery(count, thresholdBytes),
                         progress,
                         cancellation.Token);
             }
@@ -529,7 +545,7 @@ internal sealed partial class MainForm : Form
             }
 
             _files = scanned.Files.Select(file => file.Entry).ToArray();
-            await SaveVersionCacheAsync(account.AccountKey, scanned);
+            await SaveVersionCacheAsync(account.AccountKey, scanned.Files);
             ApplyResults(stopwatch.Elapsed);
 
             var reuse = scanned.ReusedFromCacheCount == 0
@@ -537,9 +553,13 @@ internal sealed partial class MainForm : Form
                 : $" / 前回結果を再利用 {scanned.ReusedFromCacheCount:N0}件";
             _statusLabel.Text =
                 $"取得完了: {_files.Count:N0}ファイル / 過去版 {_files.Sum(file => file.PreviousVersionCount):N0}件 / " +
-                $"問い合わせ {scanned.DetailedFileCount:N0}件{reuse}（{stopwatch.Elapsed.TotalSeconds:N1}秒" +
-                $"{(scanned.UsedBulkListing ? "" : " / 一覧取得は使えず全巡回")}）";
-            ReportScanErrors(scanned.FolderErrors);
+                $"ローカル検査 {survey.FilesExamined:N0}件 → 対象 {survey.Candidates.Count:N0}件 / " +
+                $"問い合わせ {scanned.QueriedFileCount:N0}件{reuse}" +
+                $"（{stopwatch.Elapsed.TotalSeconds:N1}秒）";
+
+            // Folders the walk could not read and files the service would not answer for leave
+            // gaps in the same result, so they are reported together.
+            ReportScanErrors([.. survey.Errors, .. scanned.Errors]);
         }
         catch (OperationCanceledException)
         {
@@ -612,7 +632,7 @@ internal sealed partial class MainForm : Form
         VersionDeletionPlan plan;
         try
         {
-            plan = new VersionDeletionPlanner().Create(selection, policy.MaximumDeletesPerRun);
+            plan = new VersionDeletionPlanner().Create(selection);
         }
         catch (InvalidOperationException exception)
         {
@@ -669,7 +689,7 @@ internal sealed partial class MainForm : Form
                 session.ThrottleWaitStarted -= OnThrottleWait;
             }
 
-            ApplyRefreshedFiles(output.RefreshedFiles);
+            await ApplyDeletionResultAsync(output.RefreshedFiles);
             var logPath = await WriteDeletionLogAsync(policy, output.Result);
             ReportDeletionResult(output.Result, logPath);
         }
@@ -695,12 +715,57 @@ internal sealed partial class MainForm : Form
     }
 
     /// <summary>
-    /// Records what this scan learned so the next one can skip the files that did not change.
-    /// A cache that cannot be written only costs requests later, so it never fails the scan.
+    /// Publishes what the deletion run observed, to the grid and to the cache in one step.
+    /// Both are built from the same array, so there is no order to get wrong. Recycling a
+    /// version never touches the local file, so without the cache write the next scan would
+    /// find nothing changed, reuse the stored answer, and put the versions that were just
+    /// recycled straight back on the grid.
     /// </summary>
-    private async Task SaveVersionCacheAsync(string accountKey, ScanResult scanned)
+    private async Task ApplyDeletionResultAsync(
+        IReadOnlyDictionary<string, RefreshedFile> refreshed)
     {
-        if (scanned.Files.Count == 0)
+        if (refreshed.Count == 0 || _detectedAccount is null || _libraryRoot is null)
+        {
+            return;
+        }
+
+        var observed = new List<ScannedFile>(refreshed.Count);
+        _files = _files
+            .Select(file =>
+            {
+                if (!refreshed.TryGetValue(file.ItemId, out var refresh))
+                {
+                    return file;
+                }
+
+                // The local path is carried over rather than rebuilt: it is the cache's key.
+                // The timestamp comes from the sample the run already took, so no file is
+                // read from disk again here.
+                var entry = OneDriveScanner.CreateEntry(
+                    _detectedAccount,
+                    _libraryRoot,
+                    refresh.Probe,
+                    file.LocalPath);
+                observed.Add(new ScannedFile(
+                    entry,
+                    refresh.Probe.File.Path,
+                    DateTimeOffset.UtcNow,
+                    refresh.LocalFile.LastWriteTimeUtc));
+                return entry;
+            })
+            .ToArray();
+
+        ApplyResults(_aggregate?.Summary.ScanDuration);
+        await SaveVersionCacheAsync(_detectedAccount.AccountKey, observed);
+    }
+
+    /// <summary>
+    /// Records what was observed so the next scan can skip the files that did not change.
+    /// A cache that cannot be written only costs requests later, so it never fails the caller.
+    /// </summary>
+    private async Task SaveVersionCacheAsync(string accountKey, IReadOnlyList<ScannedFile> files)
+    {
+        if (files.Count == 0)
         {
             return;
         }
@@ -709,7 +774,7 @@ internal sealed partial class MainForm : Form
         {
             var existing = await _versionCache.LoadAsync(accountKey, CancellationToken.None);
             var merged = new Dictionary<string, CachedFileVersions>(existing, StringComparer.Ordinal);
-            foreach (var file in scanned.Files)
+            foreach (var file in files)
             {
                 merged[file.Entry.ItemId] = OneDriveScanner.ToCacheEntry(file);
             }
@@ -728,10 +793,11 @@ internal sealed partial class MainForm : Form
     }
 
     /// <summary>
-    /// The per-file phase is the expensive one, and it is what got the tenant throttled before.
-    /// The user sees its size and agrees to it before a single request goes out.
+    /// The version requests are the expensive part, and they are what got the tenant throttled
+    /// before. The count is now known exactly before the first one goes out, so the user sees
+    /// it and agrees to it.
     /// </summary>
-    private bool ConfirmDetailPhase(int fileCount, long thresholdBytes)
+    private bool ConfirmVersionQuery(int fileCount, long thresholdBytes)
     {
         if (fileCount <= 200)
         {
@@ -740,30 +806,36 @@ internal sealed partial class MainForm : Form
 
         return MessageBox.Show(
             this,
-            $"履歴が {ByteSizeFormatter.Format(thresholdBytes)} 以上のファイルが {fileCount:N0} 件ありました。\n" +
-            $"これらのバージョン一覧を1ファイルずつ取得します（およそ {fileCount:N0} 回の要求）。\n\n" +
+            $"{ByteSizeFormatter.Format(thresholdBytes)} 以上のファイルが {fileCount:N0} 件あり、" +
+            "前回の結果では答えられません。\n" +
+            "これらのバージョン一覧を1ファイルずつ取得します" +
+            $"（およそ {fileCount * SharePointWebSession.RequestsPerVersionRead:N0} 回の要求）。\n\n" +
             "件数が多いと SharePoint の要求制限にかかります。\n" +
-            "中止して「処理する最小履歴容量」を大きくすると、件数を絞れます。\n\n" +
+            "中止して「処理する最小ファイルサイズ」を大きくすると、件数を絞れます。\n\n" +
             "このまま続けますか。",
             "取得件数の確認",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning) == DialogResult.Yes;
     }
 
-    private void ReportScanErrors(IReadOnlyList<string> folderErrors)
+    /// <summary>
+    /// Reports what could not be read: local folders the walk was refused, and files the
+    /// service would not return history for. Both leave gaps in the same result, so they are
+    /// surfaced together rather than as two separate warnings.
+    /// </summary>
+    private void ReportScanErrors(IReadOnlyList<string> errors)
     {
-        if (folderErrors.Count == 0)
+        if (errors.Count == 0)
         {
             return;
         }
 
-        _statusLabel.Text += $" / 読めなかったフォルダー {folderErrors.Count:N0}件";
+        _statusLabel.Text += $" / 読み取れなかった項目 {errors.Count:N0}件";
         MessageBox.Show(
             this,
-            $"{folderErrors.Count:N0}個のフォルダーを読み取れませんでした。" +
-            "その配下は集計に含まれていません。\n\n" +
-            string.Join("\n", folderErrors.Take(10)),
-            "一部のフォルダーを取得できませんでした",
+            $"{errors.Count:N0}件を読み取れませんでした。それらは集計に含まれていません。\n\n" +
+            string.Join("\n", errors.Take(10)),
+            "一部を取得できませんでした",
             MessageBoxButtons.OK,
             MessageBoxIcon.Warning);
     }
@@ -822,21 +894,6 @@ internal sealed partial class MainForm : Form
                 MessageBoxIcon.Warning);
             return null;
         }
-    }
-
-    private void ApplyRefreshedFiles(IReadOnlyDictionary<string, SharePointFileProbe> refreshed)
-    {
-        if (refreshed.Count == 0 || _detectedAccount is null || _libraryRoot is null)
-        {
-            return;
-        }
-
-        _files = _files
-            .Select(file => refreshed.TryGetValue(file.ItemId, out var probe)
-                ? OneDriveScanner.CreateEntry(_detectedAccount, _libraryRoot, probe)
-                : file)
-            .ToArray();
-        ApplyResults(_aggregate?.Summary.ScanDuration);
     }
 
     private void ReportDeletionResult(DeletionRunResult result, string? logPath)
@@ -917,11 +974,9 @@ internal sealed partial class MainForm : Form
 
     private void ApplyResults(TimeSpan? scanDuration)
     {
-        // The run limit belongs to the move, not to the analysis: raising or lowering it must
-        // not reshuffle what the table shows. The planner applies it to the actual selection.
         _retention = new RetentionPolicyEvaluator().Evaluate(
             _files,
-            CreatePolicy() with { MaximumDeletesPerRun = int.MaxValue },
+            CreatePolicy(),
             DateTimeOffset.UtcNow);
         _aggregate = new ScanAggregator().Aggregate(_files, _retention, scanDuration);
         RefreshSummary();
@@ -1259,22 +1314,6 @@ internal sealed partial class MainForm : Form
         return _sharePointSession;
     }
 
-    private static string CombineServerRelativePath(
-        string libraryRoot,
-        IReadOnlyList<string> relativeSegments)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(libraryRoot);
-        if (!libraryRoot.StartsWith('/'))
-        {
-            throw new InvalidDataException("OneDriveルートがサーバー相対パスではありません。");
-        }
-
-        var normalizedRoot = libraryRoot.TrimEnd('/');
-        return relativeSegments.Count == 0
-            ? normalizedRoot
-            : normalizedRoot + "/" + string.Join('/', relativeSegments);
-    }
-
     private RetentionPolicy CreatePolicy() => new()
     {
         KeepLatestVersions = decimal.ToInt32(_keepVersionsInput.Value),
@@ -1282,7 +1321,6 @@ internal sealed partial class MainForm : Form
         ProtectRecentlyModifiedFileDays = decimal.ToInt32(_protectDaysInput.Value),
         MinimumHistoryBytes = checked(decimal.ToInt64(_minimumHistoryInput.Value) * Mebibyte),
         MinimumCurrentFileBytes = checked(decimal.ToInt64(_minimumFileSizeInput.Value) * Mebibyte),
-        MaximumDeletesPerRun = decimal.ToInt32(_maximumCandidatesInput.Value),
     };
 
     private OneDriveBusinessAccount ValidateScanInputs()
@@ -1434,7 +1472,6 @@ internal sealed partial class MainForm : Form
         _minimumHistoryInput.Enabled = !busy;
         _minimumFileSizeInput.Enabled = !busy;
         _cacheAgeInput.Enabled = !busy;
-        _maximumCandidatesInput.Enabled = !busy;
         _candidatesOnlyCheck.Enabled = !busy;
         _stopButton.Enabled = busy;
         _exportButton.Enabled = !busy && _aggregate is not null;

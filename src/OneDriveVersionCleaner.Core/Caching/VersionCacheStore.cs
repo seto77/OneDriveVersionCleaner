@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -96,11 +95,24 @@ public sealed class VersionCacheStore
         };
 
         Directory.CreateDirectory(_directory);
-        await File.WriteAllTextAsync(
+
+        // Serialised straight into the file rather than into a string first. This cache holds
+        // every scanned file with its whole version list, and a string would be built on the
+        // caller's thread — the UI thread, after a scan or a deletion run — where it is long
+        // enough to freeze the form.
+        await using (var stream = new FileStream(
             temporaryPath,
-            JsonSerializer.Serialize(document, JsonOptions),
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            cancellationToken).ConfigureAwait(false);
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 4096,
+            useAsync: true))
+        {
+            await JsonSerializer
+                .SerializeAsync(stream, document, JsonOptions, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         File.Move(temporaryPath, path, overwrite: true);
     }
 

@@ -32,46 +32,11 @@ public sealed class RetentionPolicyEvaluator
             throw new ArgumentException("The file sequence cannot contain null entries.", nameof(files));
         }
 
-        var provisionalFiles = materializedFiles
-            .Select(file => EvaluateWithoutRunLimit(file!, policy, now))
-            .ToArray();
-
-        var allowedCandidates = provisionalFiles
-            .SelectMany(file => file.Decisions)
-            .Where(decision => decision.Disposition == RetentionDisposition.DeleteCandidate)
-            .OrderBy(decision => decision.Version.Created)
-            .ThenBy(decision => decision.File.CloudPath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(decision => decision.Version.VersionId, StringComparer.Ordinal)
-            .Take(policy.MaximumDeletesPerRun)
-            .ToHashSet(ReferenceEqualityComparer.Instance);
-
-        var finalizedFiles = provisionalFiles.Select(file =>
-        {
-            var decisions = file.Decisions.Select(decision =>
-            {
-                if (decision.Disposition != RetentionDisposition.DeleteCandidate ||
-                    allowedCandidates.Contains(decision))
-                {
-                    return decision;
-                }
-
-                return decision with
-                {
-                    Disposition = RetentionDisposition.DeferredByRunLimit,
-                    Reasons = [
-                        .. decision.Reasons,
-                        RetentionReason.MaximumDeletesPerRunReached,
-                    ],
-                };
-            }).ToArray();
-
-            return new FileRetentionEvaluation(file.File, decisions);
-        }).ToArray();
-
-        return new RetentionEvaluationResult(finalizedFiles);
+        return new RetentionEvaluationResult(
+            [.. materializedFiles.Select(file => EvaluateFile(file!, policy, now))]);
     }
 
-    private static FileRetentionEvaluation EvaluateWithoutRunLimit(
+    private static FileRetentionEvaluation EvaluateFile(
         FileEntry file,
         RetentionPolicy policy,
         DateTimeOffset now)
@@ -253,6 +218,5 @@ public sealed class RetentionPolicyEvaluator
         ArgumentOutOfRangeException.ThrowIfNegative(policy.ProtectRecentlyModifiedFileDays);
         ArgumentOutOfRangeException.ThrowIfNegative(policy.MinimumHistoryBytes);
         ArgumentOutOfRangeException.ThrowIfNegative(policy.MinimumPreviousVersionCount);
-        ArgumentOutOfRangeException.ThrowIfNegative(policy.MaximumDeletesPerRun);
     }
 }

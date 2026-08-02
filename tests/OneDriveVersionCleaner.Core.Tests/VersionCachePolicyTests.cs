@@ -15,29 +15,29 @@ public sealed class VersionCachePolicyTests
     [Fact]
     public void ShouldRequery_IsFalseWhileTheCachedAnswerIsStillYoung()
     {
-        var modified = TestData.Now.AddDays(-1);
-        var cached = Cached(queriedDaysAgo: 3, modified);
+        var written = TestData.Now.AddDays(-1);
+        var cached = Cached(queriedDaysAgo: 3, written);
 
         // Changed since the query, but asking again this soon is what got us throttled.
         Assert.False(VersionCachePolicy.ShouldRequery(
             cached,
-            modified.AddHours(1),
+            written.AddHours(1),
             TestData.Now,
             TenDays));
     }
 
     [Fact]
-    public void ShouldRequery_IsFalseForAnOldAnswerWhenTheFileNeverChanged()
+    public void ShouldRequery_IsFalseForAnOldAnswerWhenTheLocalCopyNeverMoved()
     {
-        var modified = TestData.Now.AddDays(-400);
-        var cached = Cached(queriedDaysAgo: 300, modified);
+        var written = TestData.Now.AddDays(-400);
+        var cached = Cached(queriedDaysAgo: 300, written);
 
         // History only grows when the file is edited, so an untouched file needs no request.
-        Assert.False(VersionCachePolicy.ShouldRequery(cached, modified, TestData.Now, TenDays));
+        Assert.False(VersionCachePolicy.ShouldRequery(cached, written, TestData.Now, TenDays));
     }
 
     [Fact]
-    public void ShouldRequery_IsTrueOnceTheAnswerIsOldAndTheFileHasChanged()
+    public void ShouldRequery_IsTrueOnceTheAnswerIsOldAndTheLocalCopyChanged()
     {
         var cached = Cached(queriedDaysAgo: 11, TestData.Now.AddDays(-20));
 
@@ -72,21 +72,23 @@ public sealed class VersionCachePolicyTests
             TimeSpan.Zero));
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public void HasChangedSince_TreatsAMissingTimestampAsAChange(
-        bool cachedMissing,
-        bool currentMissing)
+    [Fact]
+    public void ShouldRequery_IsTrueForAnEntryThatCarriesNoLocalTimestamp()
     {
-        var cached = Cached(
-            queriedDaysAgo: 30,
-            cachedMissing ? null : TestData.Now.AddDays(-20));
+        // Written before the scan became local-first. There is nothing to compare against, so
+        // the file is read once more and then carries a timestamp like every other entry.
+        var cached = new CachedFileVersions
+        {
+            DriveId = "drive-1",
+            ItemId = "item-1",
+            QueriedAtUtc = TestData.Now.AddDays(-300),
+        };
 
-        Assert.True(VersionCachePolicy.HasChangedSince(
+        Assert.True(VersionCachePolicy.ShouldRequery(
             cached,
-            currentMissing ? null : TestData.Now.AddDays(-20)));
+            TestData.Now.AddDays(-400),
+            TestData.Now,
+            TenDays));
     }
 
     [Fact]
@@ -99,11 +101,14 @@ public sealed class VersionCachePolicyTests
             TimeSpan.FromDays(-1)));
     }
 
-    private static CachedFileVersions Cached(int queriedDaysAgo, DateTimeOffset? modified) => new()
-    {
-        DriveId = "drive-1",
-        ItemId = "item-1",
-        QueriedAtUtc = TestData.Now.AddDays(-queriedDaysAgo),
-        FileLastModified = modified,
-    };
+    private static CachedFileVersions Cached(
+        int queriedDaysAgo,
+        DateTimeOffset localLastWrite) => new()
+        {
+            DriveId = "drive-1",
+            ItemId = "item-1",
+            QueriedAtUtc = TestData.Now.AddDays(-queriedDaysAgo),
+            FileLastModified = localLastWrite,
+            LocalLastWriteUtc = localLastWrite,
+        };
 }
