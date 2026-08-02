@@ -26,6 +26,22 @@
     </None>
   </ItemGroup>
 
+  <!-- Makes the visual designer the default view for the forms and nests their generated code. -->
+  <ItemGroup>
+    <Compile Update="MainForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="MainForm.Designer.cs">
+      <DependentUpon>MainForm.cs</DependentUpon>
+    </Compile>
+    <Compile Update="DeleteConfirmationForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="DeleteConfirmationForm.Designer.cs">
+      <DependentUpon>DeleteConfirmationForm.cs</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
   <!-- The WebView2 package references both desktop UI assemblies. This app is WinForms-only. -->
   <Target Name="RemoveUnusedWebView2WpfReference" BeforeTargets="ResolveAssemblyReferences">
     <ItemGroup>

@@ -14,7 +14,7 @@ using OneDriveVersionCleaner.Infrastructure.OneDriveAccounts;
 
 namespace OneDriveVersionCleaner.App;
 
-internal sealed class MainForm : Form
+internal sealed partial class MainForm : Form
 {
     private const long Mebibyte = 1024L * 1024;
 
@@ -24,35 +24,15 @@ internal sealed class MainForm : Form
     /// </summary>
     private const int MaximumDisplayedVersions = 5_000;
 
+    /// <summary>Splitter geometry, applied once the split area has its real size.</summary>
+    private const int VersionsPanelMinimumHeight = 220;
+    private const int FilesPanelMinimumHeight = 120;
+    private const int PreferredSplitterDistance = 440;
+
     private readonly AppSettings _settings;
     private readonly string? _settingsWarning;
     private readonly OneDriveBusinessAccountDiscovery _accountDiscovery = new();
-    private readonly TextBox _rootBox = new();
-    private readonly TextBox _targetBox = new();
-    private readonly NumericUpDown _keepVersionsInput = new();
-    private readonly NumericUpDown _keepDaysInput = new();
-    private readonly NumericUpDown _protectDaysInput = new();
-    private readonly NumericUpDown _minimumHistoryInput = new();
-    private readonly NumericUpDown _minimumFileSizeInput = new();
-    private readonly NumericUpDown _cacheAgeInput = new();
     private readonly VersionCacheStore _versionCache = new();
-    private readonly NumericUpDown _maximumCandidatesInput = new();
-    private readonly Button _browseRootButton = new();
-    private readonly Button _browseTargetButton = new();
-    private readonly Button _probeButton = new();
-    private readonly Button _scanButton = new();
-    private readonly Button _stopButton = new();
-    private readonly Button _exportButton = new();
-    private readonly Button _deleteButton = new();
-    private readonly CheckBox _candidatesOnlyCheck = new();
-    private readonly ToolTip _toolTip = new() { AutoPopDelay = 20_000 };
-    private readonly Label _accountLabel = new();
-    private readonly Label _summaryLabel = new();
-    private readonly Label _versionsHeaderLabel = new();
-    private readonly Label _statusLabel = new();
-    private readonly ProgressBar _progressBar = new();
-    private readonly DataGridView _versionsGrid = new();
-    private readonly DataGridView _filesGrid = new();
 
     /// <summary>Server-relative path per scanned file. Only these files can be acted on.</summary>
     private readonly Dictionary<string, string> _serverPathByItemId = new(StringComparer.Ordinal);
@@ -77,303 +57,187 @@ internal sealed class MainForm : Form
         public bool IsCandidate => Decision?.IsDeleteCandidate == true;
     }
 
+    /// <summary>
+    /// Designer only. Must never do anything a running instance would do: no settings, no
+    /// account discovery, no file system, no network.
+    /// </summary>
+    private MainForm()
+    {
+        _settings = new AppSettings();
+        InitializeComponent();
+    }
+
     public MainForm(AppSettings settings, string? settingsWarning)
     {
         _settings = settings;
         _settingsWarning = settingsWarning;
 
-        Text = "OneDrive Version History Cleaner";
-        StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(1100, 720);
-        Size = new Size(1360, 860);
-        AutoScaleMode = AutoScaleMode.Dpi;
-
-        BuildInterface();
+        InitializeComponent();
+        InitializeGridSchema();
         ApplySettings();
-        WireEvents();
+        WireRuntimeEvents();
         RefreshDeleteState();
-
-        Shown += (_, _) =>
-        {
-            if (!string.IsNullOrWhiteSpace(_settingsWarning))
-            {
-                MessageBox.Show(
-                    this,
-                    _settingsWarning,
-                    "設定の警告",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-            }
-        };
     }
 
-    private void BuildInterface()
+    /// <summary>
+    /// The part of the grid schema the design surface cannot carry.
+    /// A column's name is its component name in the form's container, so the two grids cannot
+    /// both own "FileName" and "CloudPath"; the designer names the fields, and the names the
+    /// code depends on are assigned here. <see cref="DataGridViewColumn.ValueType"/> is
+    /// <c>Browsable(false)</c>, so the property grid neither shows it nor round-trips it, and
+    /// losing one leaves the display correct while breaking sorting on that column alone.
+    /// <see cref="DataGridView.AutoGenerateColumns"/> is likewise not a design-time property.
+    /// </summary>
+    /// <remarks>
+    /// CreateCells fills cells by position and CellFormatting switches on the names, so the
+    /// order, the names and the types below all have to stay exactly as they are.
+    /// </remarks>
+    private void InitializeGridSchema()
     {
-        var rootLayout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 5,
-            Padding = new Padding(10),
-        };
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        rootLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _versionsGrid.AutoGenerateColumns = false;
+        _filesGrid.AutoGenerateColumns = false;
 
-        rootLayout.Controls.Add(BuildConnectionGroup(), 0, 0);
-        rootLayout.Controls.Add(BuildPolicyGroup(), 0, 1);
-        rootLayout.Controls.Add(BuildSummaryPanel(), 0, 2);
-        rootLayout.Controls.Add(BuildGridArea(), 0, 3);
-        rootLayout.Controls.Add(BuildStatusPanel(), 0, 4);
-        Controls.Add(rootLayout);
+        _versionsFileNameColumn.Name = "FileName";
+        _versionsFileNameColumn.ValueType = typeof(string);
+        _versionsCloudPathColumn.Name = "CloudPath";
+        _versionsCloudPathColumn.ValueType = typeof(string);
+        _versionsVersionLabelColumn.Name = "VersionLabel";
+        _versionsVersionLabelColumn.ValueType = typeof(string);
+        _versionsCreatedColumn.Name = "Created";
+        _versionsCreatedColumn.ValueType = typeof(DateTime);
+        _versionsModifiedByColumn.Name = "ModifiedBy";
+        _versionsModifiedByColumn.ValueType = typeof(string);
+        _versionsSizeColumn.Name = "VersionSize";
+        _versionsSizeColumn.ValueType = typeof(long);
+        _versionsFileHistorySizeColumn.Name = "FileHistorySize";
+        _versionsFileHistorySizeColumn.ValueType = typeof(long);
+        _versionsDecisionColumn.Name = "Decision";
+        _versionsDecisionColumn.ValueType = typeof(string);
+        _versionsReasonsColumn.Name = "Reasons";
+        _versionsReasonsColumn.ValueType = typeof(string);
+
+        _filesFileNameColumn.Name = "FileName";
+        _filesFileNameColumn.ValueType = typeof(string);
+        _filesCloudPathColumn.Name = "CloudPath";
+        _filesCloudPathColumn.ValueType = typeof(string);
+        _filesCurrentSizeColumn.Name = "CurrentSize";
+        _filesCurrentSizeColumn.ValueType = typeof(long);
+        _filesHistoryCountColumn.Name = "HistoryCount";
+        _filesHistoryCountColumn.ValueType = typeof(int);
+        _filesHistorySizeColumn.Name = "HistorySize";
+        _filesHistorySizeColumn.ValueType = typeof(long);
+        _filesCandidateCountColumn.Name = "CandidateCount";
+        _filesCandidateCountColumn.ValueType = typeof(int);
+        _filesReclaimableColumn.Name = "Reclaimable";
+        _filesReclaimableColumn.ValueType = typeof(long);
+        _filesLastModifiedColumn.Name = "LastModified";
+        _filesLastModifiedColumn.ValueType = typeof(DateTime);
+        _filesStatusColumn.Name = "Status";
+        _filesStatusColumn.ValueType = typeof(string);
     }
 
-    private Control BuildConnectionGroup()
+    /// <summary>
+    /// The subscriptions that must not be live yet when <see cref="ApplySettings"/> runs. The
+    /// designer wires its handlers inside InitializeComponent, which is over by then, so
+    /// loading the stored policy into the inputs would raise ValueChanged and start a
+    /// recalculation before the form has anything to recalculate.
+    /// </summary>
+    private void WireRuntimeEvents()
     {
-        var group = new GroupBox
-        {
-            Text = "接続と対象（管理センター不要／自分の OneDrive のみ）",
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            Padding = new Padding(8),
-        };
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 3,
-            RowCount = 4,
-        };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-
-        _accountLabel.AutoSize = true;
-        _accountLabel.Text = "OneDriveアカウントを自動検出しています...";
-        _accountLabel.Padding = new Padding(0, 2, 0, 6);
-        layout.Controls.Add(_accountLabel, 0, 0);
-        layout.SetColumnSpan(_accountLabel, 3);
-
-        ConfigureTextBox(_rootBox);
-        _rootBox.ReadOnly = true;
-        _browseRootButton.Text = "再検出";
-        _browseRootButton.AutoSize = true;
-        AddLabeledRow(layout, 1, "同期ルート", _rootBox, _browseRootButton);
-
-        ConfigureTextBox(_targetBox);
-        _targetBox.AllowDrop = true;
-        _browseTargetButton.Text = "フォルダー選択...";
-        _browseTargetButton.AutoSize = true;
-        AddLabeledRow(layout, 2, "対象フォルダー", _targetBox, _browseTargetButton);
-
-        var actions = new FlowLayoutPanel
-        {
-            AutoSize = true,
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            Padding = new Padding(0, 6, 0, 0),
-        };
-        _probeButton.Text = "接続テスト (1要求)";
-        _probeButton.AutoSize = true;
-        _scanButton.Text = "Webでサインインして全履歴を取得";
-        _scanButton.AutoSize = true;
-        _stopButton.Text = "停止";
-        _stopButton.AutoSize = true;
-        _stopButton.Enabled = false;
-        _exportButton.Text = "CSV / JSON 出力";
-        _exportButton.AutoSize = true;
-        _exportButton.Enabled = false;
-        _deleteButton.Text = "選択をごみ箱へ移動";
-        _deleteButton.AutoSize = true;
-        _deleteButton.Enabled = false;
-        _deleteButton.ForeColor = Color.Firebrick;
-        actions.Controls.AddRange(
-            [_probeButton, _scanButton, _stopButton, _exportButton, _deleteButton]);
-        layout.Controls.Add(actions, 1, 3);
-        layout.SetColumnSpan(actions, 2);
-
-        group.Controls.Add(layout);
-        return group;
+        _keepVersionsInput.ValueChanged += PolicyInputOnValueChanged;
+        _keepDaysInput.ValueChanged += PolicyInputOnValueChanged;
+        _protectDaysInput.ValueChanged += PolicyInputOnValueChanged;
+        _minimumHistoryInput.ValueChanged += PolicyInputOnValueChanged;
+        _minimumFileSizeInput.ValueChanged += PolicyInputOnValueChanged;
     }
 
-    private Control BuildPolicyGroup()
+    protected override void OnShown(EventArgs eventArgs)
     {
-        var group = new GroupBox
+        // Before the event is raised, so nothing observes a form whose split area is still
+        // carrying the size it had during initialization.
+        ApplySplitterLayout();
+        base.OnShown(eventArgs);
+
+        if (!string.IsNullOrWhiteSpace(_settingsWarning))
         {
-            Text = "保持条件（変更すると即時再計算）",
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            Padding = new Padding(8),
-        };
-        var flow = new FlowLayoutPanel
+            MessageBox.Show(
+                this,
+                _settingsWarning,
+                "設定の警告",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs eventArgs)
+    {
+        base.OnFormClosing(eventArgs);
+        _operationCancellation?.Cancel();
+        _sharePointSession?.Dispose();
+    }
+
+    /// <summary>
+    /// Sizes the two grid panes once the split area has its real height. Neither the splitter
+    /// position nor the panel minimums can be set during initialization: they are validated
+    /// against the size the control has at that moment, which is still the design-time one, and
+    /// the form's own MinimumSize is no guide either because the panels above it grow with the
+    /// display scaling and with text that wraps.
+    /// </summary>
+    private void ApplySplitterLayout()
+    {
+        var available = _splitContainer.ClientSize.Height - _splitContainer.SplitterWidth;
+        if (available < VersionsPanelMinimumHeight + FilesPanelMinimumHeight)
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = true,
-        };
+            return;
+        }
 
-        ConfigureNumber(_keepVersionsInput, 0, 100000);
-        ConfigureNumber(_keepDaysInput, 0, 36500);
-        ConfigureNumber(_protectDaysInput, 0, 36500);
-        ConfigureNumber(_minimumHistoryInput, 0, 10_000_000);
-        ConfigureNumber(_minimumFileSizeInput, 0, 10_000_000);
-        ConfigureNumber(_cacheAgeInput, 0, 36500);
-        ConfigureNumber(_maximumCandidatesInput, 0, 1_000_000);
-
-        AddPolicyControl(
-            flow, "保持する履歴数", _keepVersionsInput, "件",
-            "各ファイルについて、新しいものから数えてこの件数の過去バージョンを残します。0で無効。");
-        AddPolicyControl(
-            flow, "最終更新から保持", _keepDaysInput, "日",
-            "そのファイルの最終更新日時から遡ってこの日数以内に作られた過去バージョンを残します。\n" +
-            "現在時刻ではなくファイル自身の更新日時が基準です。0で無効。");
-        AddPolicyControl(
-            flow, "更新直後は対象外", _protectDaysInput, "日以内",
-            "現在時刻からこの日数以内に更新されたファイルは、丸ごと処理対象から外します。0で無効。");
-        AddPolicyControl(
-            flow, "処理する最小ファイルサイズ", _minimumFileSizeInput, "MB以上",
-            "現行サイズがこの値以上のファイルだけを処理します。\n" +
-            "小さいファイルは何世代あっても削減量が知れているため、サーバーに問い合わせません。\n" +
-            "サイズはローカルの同期フォルダーから読むので、この絞り込みに通信は発生しません。0で無効。");
-        AddPolicyControl(
-            flow, "処理する最小履歴容量", _minimumHistoryInput, "MB以上",
-            "過去バージョンの合計がこの値以上のファイルだけを処理します。\n" +
-            "これ未満のファイルは丸ごと対象外です。0で無効。");
-        AddPolicyControl(
-            flow, "再問い合わせの間隔", _cacheAgeInput, "日以上",
-            "一度取得したバージョン履歴は保存され、次回以降は再利用します。\n" +
-            "同じファイルを問い合わせ直すのは、前回の取得からこの日数が経ち、かつ\n" +
-            "ファイルが更新されている場合だけです。\n" +
-            "履歴は編集したときにしか増えないため、更新のないファイルは問い合わせません。0で毎回。");
-        AddPolicyControl(
-            flow, "1回の最大移動数", _maximumCandidatesInput, "件",
-            "1回の実行でごみ箱へ移動する上限です。超えた分は次回に見送ります。");
-
-        _candidatesOnlyCheck.Text = "削除候補のみ表示";
-        _candidatesOnlyCheck.AutoSize = true;
-        _candidatesOnlyCheck.Checked = true;
-        _candidatesOnlyCheck.Margin = new Padding(16, 7, 3, 3);
-        flow.Controls.Add(_candidatesOnlyCheck);
-
-        group.Controls.Add(flow);
-        return group;
+        _splitContainer.Panel1MinSize = VersionsPanelMinimumHeight;
+        _splitContainer.Panel2MinSize = FilesPanelMinimumHeight;
+        _splitContainer.SplitterDistance = Math.Clamp(
+            PreferredSplitterDistance,
+            VersionsPanelMinimumHeight,
+            available - FilesPanelMinimumHeight);
     }
 
-    private Control BuildSummaryPanel()
+    private void BrowseRootButtonOnClick(object? sender, EventArgs eventArgs) =>
+        DetectOneDriveAccount(showFailure: true);
+
+    private void BrowseTargetButtonOnClick(object? sender, EventArgs eventArgs) =>
+        BrowseForTargetFolder();
+
+    private void StopButtonOnClick(object? sender, EventArgs eventArgs) => RequestStop();
+
+    private void CandidatesOnlyCheckOnCheckedChanged(object? sender, EventArgs eventArgs) =>
+        RefreshVersionsGrid();
+
+    private void PolicyInputOnValueChanged(object? sender, EventArgs eventArgs) => Recalculate();
+
+    private void VersionsGridOnSelectionChanged(object? sender, EventArgs eventArgs)
     {
-        var panel = new TableLayoutPanel
+        if (!_rebuildingVersionsGrid)
         {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 1,
-            RowCount = 1,
-            Padding = new Padding(4, 8, 4, 8),
-        };
-        _summaryLabel.AutoSize = true;
-        _summaryLabel.Text = "データはまだありません。";
-        panel.Controls.Add(_summaryLabel, 0, 0);
-        return panel;
+            RefreshDeleteState();
+        }
     }
 
-    private Control BuildGridArea()
+    private void FileContextMenuOnOpening(
+        object? sender,
+        System.ComponentModel.CancelEventArgs eventArgs)
     {
-        ConfigureVersionsGrid();
-        ConfigureFilesGrid();
-
-        var split = new SplitContainer
+        var selected = SelectedFile();
+        eventArgs.Cancel = selected is null;
+        if (selected is not null)
         {
-            Dock = DockStyle.Fill,
-            Orientation = Orientation.Horizontal,
-            SplitterDistance = 440,
-            Panel1MinSize = 220,
-            Panel2MinSize = 120,
-        };
-
-        _versionsHeaderLabel.Text = "過去バージョン";
-        split.Panel1.Controls.Add(WrapGrid(_versionsHeaderLabel, _versionsGrid));
-        split.Panel2.Controls.Add(WrapGrid(
-            new Label { Text = "ファイル別の履歴容量" },
-            _filesGrid));
-        return split;
+            _openFolderMenuItem.Enabled = File.Exists(selected.File.LocalPath);
+            _openOnWebMenuItem.Enabled = !string.IsNullOrWhiteSpace(selected.File.WebUrl);
+        }
     }
 
-    private Control BuildStatusPanel()
-    {
-        var panel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            ColumnCount = 2,
-            RowCount = 1,
-        };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
-        _statusLabel.AutoSize = true;
-        _statusLabel.Text = "準備完了";
-        _statusLabel.Anchor = AnchorStyles.Left;
-        _progressBar.Dock = DockStyle.Fill;
-        _progressBar.Style = ProgressBarStyle.Marquee;
-        _progressBar.Visible = false;
-        panel.Controls.Add(_statusLabel, 0, 0);
-        panel.Controls.Add(_progressBar, 1, 0);
-        return panel;
-    }
+    private void OpenFolderMenuItemOnClick(object? sender, EventArgs eventArgs) =>
+        OpenSelectedFileFolder();
 
-    private void ConfigureVersionsGrid()
-    {
-        ConfigureGrid(_versionsGrid);
-        _versionsGrid.MultiSelect = true;
-        _versionsGrid.Columns.Add(CreateTextColumn("FileName", "ファイル名", 180));
-        _versionsGrid.Columns.Add(CreateTextColumn("CloudPath", "パス", 320));
-        _versionsGrid.Columns.Add(CreateTextColumn("VersionLabel", "バージョン", 90));
-        _versionsGrid.Columns.Add(CreateTextColumn("Created", "作成日時", 150, valueType: typeof(DateTime)));
-        _versionsGrid.Columns.Add(CreateTextColumn("ModifiedBy", "更新者", 130));
-        _versionsGrid.Columns.Add(CreateTextColumn("VersionSize", "サイズ", 105, valueType: typeof(long)));
-        _versionsGrid.Columns.Add(
-            CreateTextColumn("FileHistorySize", "ファイル履歴計", 115, valueType: typeof(long)));
-        _versionsGrid.Columns.Add(CreateTextColumn("Decision", "判定", 110));
-        _versionsGrid.Columns.Add(CreateTextColumn("Reasons", "理由", 260));
-        _versionsGrid.CellFormatting += VersionsGridOnCellFormatting;
-    }
-
-    private void ConfigureFilesGrid()
-    {
-        ConfigureGrid(_filesGrid);
-        _filesGrid.ContextMenuStrip = BuildFileContextMenu();
-        _filesGrid.CellMouseDown += FilesGridOnCellMouseDown;
-        _filesGrid.Columns.Add(CreateTextColumn("FileName", "ファイル名", 180));
-        _filesGrid.Columns.Add(CreateTextColumn("CloudPath", "パス", 320));
-        _filesGrid.Columns.Add(CreateTextColumn("CurrentSize", "現行サイズ", 100, valueType: typeof(long)));
-        _filesGrid.Columns.Add(CreateTextColumn("HistoryCount", "履歴数", 75, valueType: typeof(int)));
-        _filesGrid.Columns.Add(CreateTextColumn("HistorySize", "履歴容量", 115, valueType: typeof(long)));
-        _filesGrid.Columns.Add(CreateTextColumn("CandidateCount", "候補数", 75, valueType: typeof(int)));
-        _filesGrid.Columns.Add(CreateTextColumn("Reclaimable", "削減見込み", 115, valueType: typeof(long)));
-        _filesGrid.Columns.Add(CreateTextColumn("LastModified", "最終更新", 140, valueType: typeof(DateTime)));
-        _filesGrid.Columns.Add(CreateTextColumn("Status", "状態", 90));
-        _filesGrid.CellFormatting += FilesGridOnCellFormatting;
-    }
-
-    private ContextMenuStrip BuildFileContextMenu()
-    {
-        var menu = new ContextMenuStrip();
-        menu.Items.Add("フォルダーを開く", null, (_, _) => OpenSelectedFileFolder());
-        menu.Items.Add("Webで開く", null, (_, _) => OpenSelectedFileOnWeb());
-        menu.Opening += (_, eventArgs) =>
-        {
-            var selected = SelectedFile();
-            eventArgs.Cancel = selected is null;
-            if (selected is not null)
-            {
-                menu.Items[0].Enabled = File.Exists(selected.File.LocalPath);
-                menu.Items[1].Enabled = !string.IsNullOrWhiteSpace(selected.File.WebUrl);
-            }
-        };
-        return menu;
-    }
+    private void OpenOnWebMenuItemOnClick(object? sender, EventArgs eventArgs) =>
+        OpenSelectedFileOnWeb();
 
     /// <summary>
     /// A right-click outside the current selection moves the selection to the clicked row, so
@@ -487,37 +351,6 @@ internal sealed class MainForm : Form
         SetNumber(_minimumFileSizeInput, _settings.MinimumFileSizeMB);
         SetNumber(_cacheAgeInput, _settings.VersionCacheMinimumAgeDays);
         SetNumber(_maximumCandidatesInput, _settings.MaximumDeletesPerRun);
-    }
-
-    private void WireEvents()
-    {
-        _browseRootButton.Click += (_, _) => DetectOneDriveAccount(showFailure: true);
-        _browseTargetButton.Click += (_, _) => BrowseForTargetFolder();
-        _probeButton.Click += ProbeButtonOnClick;
-        _scanButton.Click += ScanButtonOnClick;
-        _stopButton.Click += (_, _) => RequestStop();
-        _exportButton.Click += ExportButtonOnClick;
-        _deleteButton.Click += DeleteButtonOnClick;
-        _versionsGrid.SelectionChanged += (_, _) =>
-        {
-            if (!_rebuildingVersionsGrid)
-            {
-                RefreshDeleteState();
-            }
-        };
-        _candidatesOnlyCheck.CheckedChanged += (_, _) => RefreshVersionsGrid();
-        _targetBox.DragEnter += TargetBoxOnDragEnter;
-        _targetBox.DragDrop += TargetBoxOnDragDrop;
-        _keepVersionsInput.ValueChanged += (_, _) => Recalculate();
-        _keepDaysInput.ValueChanged += (_, _) => Recalculate();
-        _protectDaysInput.ValueChanged += (_, _) => Recalculate();
-        _minimumHistoryInput.ValueChanged += (_, _) => Recalculate();
-        _minimumFileSizeInput.ValueChanged += (_, _) => Recalculate();
-        FormClosing += (_, _) =>
-        {
-            _operationCancellation?.Cancel();
-            _sharePointSession?.Dispose();
-        };
     }
 
     /// <summary>
@@ -1552,7 +1385,7 @@ internal sealed class MainForm : Form
             : File.Exists(path) ? Path.GetDirectoryName(path) ?? string.Empty : path;
     }
 
-    private static void TargetBoxOnDragEnter(object? sender, DragEventArgs eventArgs)
+    private void TargetBoxOnDragEnter(object? sender, DragEventArgs eventArgs)
     {
         eventArgs.Effect = GetDroppedFolder(eventArgs.Data) is null
             ? DragDropEffects.None
@@ -1670,144 +1503,6 @@ internal sealed class MainForm : Form
                 break;
         }
     }
-
-    private static void ConfigureTextBox(TextBox textBox)
-    {
-        textBox.Dock = DockStyle.Fill;
-        textBox.Margin = new Padding(4);
-    }
-
-    private static void AddLabeledRow(
-        TableLayoutPanel layout,
-        int row,
-        string label,
-        Control input,
-        Control? trailing = null)
-    {
-        var labelControl = new Label
-        {
-            AutoSize = true,
-            Text = label,
-            Anchor = AnchorStyles.Left,
-            Margin = new Padding(3, 8, 8, 3),
-        };
-        layout.Controls.Add(labelControl, 0, row);
-        layout.Controls.Add(input, 1, row);
-        if (trailing is null)
-        {
-            layout.SetColumnSpan(input, 2);
-        }
-        else
-        {
-            layout.Controls.Add(trailing, 2, row);
-        }
-    }
-
-    private static void ConfigureNumber(NumericUpDown input, decimal minimum, decimal maximum)
-    {
-        input.Minimum = minimum;
-        input.Maximum = maximum;
-        input.Width = 85;
-        input.TextAlign = HorizontalAlignment.Right;
-        input.ThousandsSeparator = true;
-    }
-
-    private void AddPolicyControl(
-        FlowLayoutPanel panel,
-        string label,
-        NumericUpDown input,
-        string suffix,
-        string description)
-    {
-        var wrapper = new FlowLayoutPanel
-        {
-            AutoSize = true,
-            FlowDirection = FlowDirection.LeftToRight,
-            WrapContents = false,
-            Margin = new Padding(0, 0, 18, 0),
-        };
-        var labelControl = new Label
-        {
-            AutoSize = true,
-            Text = label,
-            Anchor = AnchorStyles.Left,
-            Margin = new Padding(3, 7, 5, 3),
-        };
-        var suffixControl = new Label
-        {
-            AutoSize = true,
-            Text = suffix,
-            Anchor = AnchorStyles.Left,
-            Margin = new Padding(3, 7, 3, 3),
-        };
-
-        wrapper.Controls.Add(labelControl);
-        wrapper.Controls.Add(input);
-        wrapper.Controls.Add(suffixControl);
-        panel.Controls.Add(wrapper);
-
-        foreach (var control in new Control[] { labelControl, input, suffixControl })
-        {
-            _toolTip.SetToolTip(control, description);
-        }
-    }
-
-    private static Control WrapGrid(Label header, DataGridView grid)
-    {
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-        };
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-        header.AutoSize = true;
-        header.Dock = DockStyle.Top;
-        header.Padding = new Padding(2, 2, 2, 4);
-        layout.Controls.Add(header, 0, 0);
-        layout.Controls.Add(grid, 0, 1);
-        return layout;
-    }
-
-    private static void ConfigureGrid(DataGridView grid)
-    {
-        grid.Dock = DockStyle.Fill;
-        grid.ReadOnly = true;
-        grid.AllowUserToAddRows = false;
-        grid.AllowUserToDeleteRows = false;
-        grid.AllowUserToResizeRows = false;
-        grid.AllowUserToResizeColumns = true;
-        grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None;
-        grid.AutoGenerateColumns = false;
-        grid.MultiSelect = false;
-        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        grid.RowHeadersVisible = false;
-        grid.BackgroundColor = SystemColors.Window;
-        grid.BorderStyle = BorderStyle.Fixed3D;
-        grid.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None;
-    }
-
-    /// <summary>
-    /// Every column keeps <see cref="DataGridViewAutoSizeColumnMode.None"/> so the user can
-    /// drag any of them. A Fill column recomputes its width to take the remaining space, which
-    /// makes it snap straight back and look like it cannot be resized at all.
-    /// </summary>
-    private static DataGridViewTextBoxColumn CreateTextColumn(
-        string name,
-        string header,
-        int width,
-        Type? valueType = null) => new()
-    {
-        Name = name,
-        HeaderText = header,
-        Width = width,
-        AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
-        Resizable = DataGridViewTriState.True,
-        ValueType = valueType ?? typeof(string),
-        SortMode = DataGridViewColumnSortMode.Automatic,
-    };
 
     private static void SetNumber(NumericUpDown input, long value)
     {
