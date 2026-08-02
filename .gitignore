@@ -10,3 +10,4 @@ artifacts/
 appsettings.json
 !src/OneDriveVersionCleaner.App/appsettings.json
 *.log
+publish/

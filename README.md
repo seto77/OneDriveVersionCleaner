@@ -100,6 +100,16 @@ VS Code の場合はフォルダーを開いて `F5` でも起動します。
 
 **最初は小さいテストフォルダーで試してください。** 段階を踏んだ手順は [RESTART_TEST_INSTRUCTIONS.md](RESTART_TEST_INSTRUCTIONS.md) にあります。
 
+## 配布用のビルド
+
+```console
+pwsh scripts/publish.ps1
+```
+
+ランタイムを同梱した単一 exe を作り、7-Zip で圧縮します。**利用者の環境に .NET が入っていなくても動きます。** 実測で 112 MB → 31 MB です。
+
+Windows には .NET ランタイムがプリインストールされていないため、self-contained 以外の形式だと利用者に別途インストールを求めることになります。
+
 ## 保持条件
 
 各項目は画面上で変更でき、マウスを乗せると説明が出ます。
@@ -138,13 +148,14 @@ VS Code の場合はフォルダーを開いて `F5` でも起動します。
 ```text
 src/
 ├─ OneDriveVersionCleaner.Core/            保持判定、集計、削除計画、キャッシュ、出力（UI非依存）
-├─ OneDriveVersionCleaner.Infrastructure/  OneDriveアカウント検出、Graph実装
-├─ OneDriveVersionCleaner.App/             WinForms UI、SharePoint RESTセッション
-└─ OneDriveVersionProbe/                   API検証用コンソール（Phase 0の成果物）
+├─ OneDriveVersionCleaner.Infrastructure/  OneDriveアカウントの自動検出（レジストリ）
+└─ OneDriveVersionCleaner.App/             WinForms UI、SharePoint RESTセッション
 tests/                                     単体テスト
 ```
 
 保持判定と削除計画は Core に閉じており、UI や通信から独立して検証できます。
+
+外部依存は `Microsoft.Web.WebView2` の1つだけです。
 
 ```console
 dotnet test

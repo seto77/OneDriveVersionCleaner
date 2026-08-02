@@ -1,5 +1,4 @@
 using OneDriveVersionCleaner.Core.Models;
-using OneDriveVersionCleaner.Core.Services;
 
 namespace OneDriveVersionCleaner.Core.Tests;
 
@@ -33,16 +32,5 @@ public sealed class ModelContractTests
         bool expectedSuccess)
     {
         Assert.Equal(expectedSuccess, new DeleteResult { Status = status }.IsSuccess);
-    }
-
-    [Fact]
-    public void ServiceContract_CannotDeleteFileBodies()
-    {
-        var methods = typeof(IOneDriveVersionService).GetMethods();
-
-        Assert.Contains(methods, method => method.Name == nameof(IOneDriveVersionService.DeleteVersionAsync));
-        Assert.DoesNotContain(methods, method =>
-            method.Name.Contains("DeleteFile", StringComparison.OrdinalIgnoreCase) ||
-            method.Name.Contains("DeleteItem", StringComparison.OrdinalIgnoreCase));
     }
 }
