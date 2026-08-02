@@ -1,0 +1,53 @@
+# push / PR ごとの最小 CI。
+#
+# このリポジトリはファイルのバージョン履歴を削除する。保持判定・削除計画・監査ログは Core と
+# Infrastructure に閉じており、単体テストで検証できる。そこが壊れたことを、実機で気づく前に
+# 検出するのがこの workflow の目的。
+#
+# 意図的にやらないこと:
+#   - 実際の SharePoint への通信を伴う試験（本人アカウントが要る。手順は
+#     RESTART_TEST_INSTRUCTIONS.md にあり、人手で行う）
+#   - self-contained exe の発行・署名（scripts/publish.ps1 がリリース時に担当）
+#   - WinForms デザイナーの往復確認（Visual Studio が要る）
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# 同一 ref の古い run は打ち切る
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (Windows)
+    # WinForms を含むので Windows 以外では動かない
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # global.json が SDK を固定しているので、そこから読む。
+      # バージョンをここに書き写すと2か所が食い違う。
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore OneDriveVersionCleaner.slnx
+
+      # Directory.Build.props が TreatWarningsAsErrors を立てているので、警告が出れば落ちる。
+      # SDK 更新で新しい警告が増えたときもここで止まる。それは意図した動作で、
+      # ローカルのビルドも同じ条件で止まる。
+      - name: Build
+        run: dotnet build OneDriveVersionCleaner.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test OneDriveVersionCleaner.slnx --configuration Release --no-build

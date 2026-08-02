@@ -1,4 +1,5 @@
 using System.Globalization;
+using OneDriveVersionCleaner.Core.Auditing;
 using OneDriveVersionCleaner.Core.Deletion;
 using OneDriveVersionCleaner.Core.Models;
 using static OneDriveVersionCleaner.App.Localization.Localization;
@@ -32,9 +33,15 @@ internal sealed record VersionDeletionRunOutput(
 /// (FR-DELETE-010) and re-samples the synced local copy. Deleting history must never touch the
 /// current file, so if the local copy disappears or its timestamp moves, the run stops.
 /// </summary>
+/// <remarks>
+/// Everything the run observes goes into <paramref name="journal"/> as it happens, not at the
+/// end. The run reaches out to a network service and moves things the user cannot easily get
+/// back; if it dies part-way, what it had already done still has to be readable afterwards.
+/// </remarks>
 internal sealed class VersionDeletionRunner(
     SharePointWebSession session,
-    Func<FileEntry, string?> serverRelativePathResolver)
+    Func<FileEntry, string?> serverRelativePathResolver,
+    DeletionRunJournal journal)
 {
     public async Task<VersionDeletionRunOutput> RunAsync(
         VersionDeletionPlan plan,
@@ -43,7 +50,9 @@ internal sealed class VersionDeletionRunner(
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var startedAtUtc = DateTimeOffset.UtcNow;
+        // The journal was opened before the first request could go out, so its timestamp is the
+        // run's. Taking it from there keeps the log and the result from disagreeing.
+        var startedAtUtc = journal.StartedAtUtc;
         var outcomes = new List<VersionDeletionOutcome>(plan.VersionCount);
         var verifications = new List<FileDeletionVerification>(plan.FileCount);
         var refreshed = new Dictionary<string, RefreshedFile>(StringComparer.Ordinal);
@@ -56,7 +65,7 @@ internal sealed class VersionDeletionRunner(
             var serverRelativePath = serverRelativePathResolver(file.File);
             if (string.IsNullOrWhiteSpace(serverRelativePath))
             {
-                RecordAll(outcomes, file, DeleteResultStatus.PermanentError, Loc(
+                await RecordAllAsync(outcomes, file, DeleteResultStatus.PermanentError, Loc(
                     en: "Its location on OneDrive could not be resolved. Scan again.",
                     ja: "OneDrive上の位置を特定できませんでした。再度スキャンしてください。"));
                 continue;
@@ -74,7 +83,7 @@ internal sealed class VersionDeletionRunner(
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                RecordAll(outcomes, file, DeleteResultStatus.TransientError, Loc(
+                await RecordAllAsync(outcomes, file, DeleteResultStatus.TransientError, Loc(
                     en: $"The pre-delete check failed ({exception.GetType().Name}: {exception.Message})",
                     ja: $"削除前の確認に失敗しました（{exception.GetType().Name}: {exception.Message}）"));
                 continue;
@@ -85,7 +94,7 @@ internal sealed class VersionDeletionRunner(
             // guard so far validated the wrong item.
             if (!IsSameFile(file.File, current.File))
             {
-                RecordAll(outcomes, file, DeleteResultStatus.PermanentError, Loc(
+                await RecordAllAsync(outcomes, file, DeleteResultStatus.PermanentError, Loc(
                     en: "A different file now sits at that location. Scan again.",
                     ja: "走査時とは別のファイルがこの位置にあります。再度スキャンしてください。"));
                 continue;
@@ -127,7 +136,7 @@ internal sealed class VersionDeletionRunner(
                 {
                     // Still there but no longer historical means it became the current version;
                     // that is a refusal, not a completed deletion, so the two are kept apart.
-                    outcomes.Add(new VersionDeletionOutcome(
+                    await RecordAsync(outcomes, new VersionDeletionOutcome(
                         file.File,
                         version,
                         present.Contains(version.VersionId)
@@ -163,10 +172,10 @@ internal sealed class VersionDeletionRunner(
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
                     // Deliberately broad: once anything has been recycled, an escaping
-                    // exception would take the audit log and the post-checks with it. Every
-                    // failure therefore ends the run through the normal path, carrying its
-                    // type so an unexpected one is still diagnosable.
-                    outcomes.Add(new VersionDeletionOutcome(file.File, version, new DeleteResult
+                    // exception would take the post-checks with it. Every failure therefore ends
+                    // the run through the normal path, carrying its type so an unexpected one is
+                    // still diagnosable. The journal is already on disk either way.
+                    await RecordAsync(outcomes, new VersionDeletionOutcome(file.File, version, new DeleteResult
                     {
                         Status = DeleteResultStatus.PermanentError,
                         Error = $"{exception.GetType().Name}: {exception.Message}",
@@ -179,13 +188,14 @@ internal sealed class VersionDeletionRunner(
                 }
 
                 attemptedAnything = true;
-                outcomes.Add(new VersionDeletionOutcome(file.File, version, result));
+                await RecordAsync(outcomes, new VersionDeletionOutcome(file.File, version, result));
             }
 
             if (attemptedAnything)
             {
                 var verification = await VerifyAsync(file, serverRelativePath, localBefore, outcomes, refreshed);
                 verifications.Add(verification);
+                await journal.RecordVerificationAsync(verification, CancellationToken.None);
 
                 if (!verification.LocalFile.IsSafe)
                 {
@@ -251,16 +261,39 @@ internal sealed class VersionDeletionRunner(
         actual.UniqueId != Guid.Empty &&
         string.Equals(expected.ItemId, actual.UniqueId.ToString("D"), StringComparison.OrdinalIgnoreCase);
 
-    private static void RecordAll(
+    /// <summary>
+    /// Adds an outcome to the run and writes it to the journal in the same breath, so the two
+    /// cannot drift apart.
+    /// </summary>
+    /// <remarks>
+    /// A journal write that fails is left to propagate. The alternative — carrying on with a
+    /// record that has holes in it — is the situation the journal exists to prevent, and the
+    /// lines written so far are already on disk.
+    /// </remarks>
+    private async Task RecordAsync(
+        List<VersionDeletionOutcome> outcomes,
+        VersionDeletionOutcome outcome)
+    {
+        outcomes.Add(outcome);
+        await journal.RecordAttemptAsync(outcome, CancellationToken.None);
+    }
+
+    /// <summary>Records the same refusal against every version planned for one file.</summary>
+    private async Task RecordAllAsync(
         List<VersionDeletionOutcome> outcomes,
         PlannedFileDeletion file,
         DeleteResultStatus status,
-        string error) => outcomes.AddRange(file.Versions.Select(version =>
-        new VersionDeletionOutcome(file.File, version, new DeleteResult
+        string error)
+    {
+        foreach (var version in file.Versions)
         {
-            Status = status,
-            Error = error,
-        })));
+            await RecordAsync(outcomes, new VersionDeletionOutcome(file.File, version, new DeleteResult
+            {
+                Status = status,
+                Error = error,
+            }));
+        }
+    }
 
     private async Task<FileDeletionVerification> VerifyAsync(
         PlannedFileDeletion file,

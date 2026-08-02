@@ -13,15 +13,12 @@ public sealed class DeletionAuditLogTests : IDisposable
         Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public async Task WriteRunAsync_RecordsEveryAttemptWithItsIdentifiersAndOutcome()
+    public async Task RecordAttemptAsync_RecordsEveryAttemptWithItsIdentifiersAndOutcome()
     {
-        var path = await new DeletionAuditLog(_directory).WriteRunAsync(
-            "Business1",
-            TestData.Policy(keepLatest: 10, keepDays: 30),
-            Result(Outcome("512", 300, DeleteResultStatus.Deleted)));
+        await using var journal = await BeginAsync();
+        await journal.RecordAttemptAsync(Outcome("512", 300, DeleteResultStatus.Deleted));
 
-        var events = ReadEvents(path);
-        var attempt = Assert.Single(events, e => Name(e) == "versionRecycleAttempted");
+        var attempt = Assert.Single(ReadEvents(journal.Path), e => Name(e) == "versionRecycleAttempted");
         var details = attempt.GetProperty("details");
 
         Assert.Equal("Business1", details.GetProperty("accountKey").GetString());
@@ -36,19 +33,26 @@ public sealed class DeletionAuditLogTests : IDisposable
     }
 
     [Fact]
-    public async Task WriteRunAsync_BracketsTheRunWithStartAndCompletionEvents()
+    public async Task Journal_BracketsTheRunWithStartAndCompletionEvents()
     {
-        var path = await new DeletionAuditLog(_directory).WriteRunAsync(
-            "Business1",
-            TestData.Policy(),
-            Result(
-                Outcome("512", 300, DeleteResultStatus.Deleted),
-                Outcome("1024", 400, DeleteResultStatus.AccessDenied)));
+        var outcomes = new[]
+        {
+            Outcome("512", 300, DeleteResultStatus.Deleted),
+            Outcome("1024", 400, DeleteResultStatus.AccessDenied),
+        };
 
-        var events = ReadEvents(path);
+        await using var journal = await BeginAsync(plannedVersionCount: 2);
+        foreach (var outcome in outcomes)
+        {
+            await journal.RecordAttemptAsync(outcome);
+        }
 
+        await journal.CompleteAsync(Result(outcomes));
+
+        var events = ReadEvents(journal.Path);
         Assert.Equal("runStarted", Name(events[0]));
         Assert.Equal("runCompleted", Name(events[^1]));
+        Assert.Equal(2, events[0].GetProperty("details").GetProperty("plannedVersionCount").GetInt32());
 
         var completion = events[^1].GetProperty("details");
         Assert.Equal(1, completion.GetProperty("deletedCount").GetInt32());
@@ -56,32 +60,41 @@ public sealed class DeletionAuditLogTests : IDisposable
         Assert.Equal(300, completion.GetProperty("knownReclaimedBytes").GetInt64());
 
         // Every line of a run shares one identifier, so concurrent runs stay separable.
-        var runIds = events.Select(e => e.GetProperty("runId").GetString()).Distinct();
-        Assert.Single(runIds);
+        Assert.Single(events.Select(e => e.GetProperty("runId").GetString()).Distinct());
+    }
+
+    /// <summary>
+    /// The reason the journal exists. A run that is killed part-way still has to leave behind
+    /// what it had already done, and the missing closing line is what says it was killed.
+    /// </summary>
+    [Fact]
+    public async Task Journal_IsReadableBeforeTheRunEnds()
+    {
+        await using var journal = await BeginAsync();
+        await journal.RecordAttemptAsync(Outcome("512", 300, DeleteResultStatus.Deleted));
+
+        // Read it while the journal is still open, as a crash-time reader would.
+        var events = ReadEvents(journal.Path);
+
+        Assert.Equal(
+            new[] { "runStarted", "versionRecycleAttempted" },
+            events.Select(Name).ToArray());
+        Assert.DoesNotContain(events, e => Name(e) == "runCompleted");
+        Assert.False(journal.IsComplete);
     }
 
     [Fact]
-    public async Task WriteRunAsync_RecordsTheCloudReReadAndTheLocalFileCheck()
+    public async Task RecordVerificationAsync_RecordsTheCloudReReadAndTheLocalFileCheck()
     {
-        var result = Result(Outcome("512", 300, DeleteResultStatus.Deleted)) with
-        {
-            Verifications =
-            [
-                new FileDeletionVerification(
-                    TestData.File(),
-                    2,
-                    ["512"],
-                    TestData.ChangedLocalFile(),
-                    null),
-            ],
-        };
+        await using var journal = await BeginAsync();
+        await journal.RecordVerificationAsync(new FileDeletionVerification(
+            TestData.File(),
+            2,
+            ["512"],
+            TestData.ChangedLocalFile(),
+            null));
 
-        var path = await new DeletionAuditLog(_directory).WriteRunAsync(
-            "Business1",
-            TestData.Policy(),
-            result);
-
-        var verification = Assert.Single(ReadEvents(path), e => Name(e) == "versionsReverified");
+        var verification = Assert.Single(ReadEvents(journal.Path), e => Name(e) == "versionsReverified");
         var details = verification.GetProperty("details");
 
         Assert.Equal(2, details.GetProperty("remainingPreviousVersionCount").GetInt32());
@@ -98,35 +111,55 @@ public sealed class DeletionAuditLogTests : IDisposable
     }
 
     [Fact]
-    public async Task WriteRunAsync_RecordsWhyARunWasAborted()
+    public async Task CompleteAsync_RecordsWhyARunWasAborted()
     {
-        var result = Result(Outcome("512", 300, DeleteResultStatus.Deleted)) with
+        var result = Result([Outcome("512", 300, DeleteResultStatus.Deleted)]) with
         {
             AbortReason = "ローカルファイルの状態が変化しました",
         };
 
-        var path = await new DeletionAuditLog(_directory).WriteRunAsync(
-            "Business1",
-            TestData.Policy(),
-            result);
+        await using var journal = await BeginAsync();
+        await journal.CompleteAsync(result);
 
-        var completion = ReadEvents(path)[^1].GetProperty("details");
+        var completion = ReadEvents(journal.Path)[^1].GetProperty("details");
         Assert.Equal(
             "ローカルファイルの状態が変化しました",
             completion.GetProperty("abortReason").GetString());
     }
 
     [Fact]
-    public async Task WriteRunAsync_AppendsWithoutLosingEarlierRuns()
+    public async Task BeginRunAsync_AppendsWithoutLosingEarlierRuns()
     {
         var log = new DeletionAuditLog(_directory);
-        var result = Result(Outcome("512", 300, DeleteResultStatus.Deleted));
+        var outcome = Outcome("512", 300, DeleteResultStatus.Deleted);
 
-        var first = await log.WriteRunAsync("Business1", TestData.Policy(), result);
-        var second = await log.WriteRunAsync("Business1", TestData.Policy(), result);
+        string first;
+        await using (var journal = await log.BeginRunAsync("Business1", TestData.Policy(), 1))
+        {
+            first = journal.Path;
+            await journal.RecordAttemptAsync(outcome);
+            await journal.CompleteAsync(Result([outcome]));
+        }
 
-        Assert.Equal(first, second);
-        Assert.Equal(6, ReadEvents(second).Count);
+        await using var second = await log.BeginRunAsync("Business1", TestData.Policy(), 1);
+        await second.RecordAttemptAsync(outcome);
+        await second.CompleteAsync(Result([outcome]));
+
+        Assert.Equal(first, second.Path);
+        Assert.Equal(6, ReadEvents(second.Path).Count);
+        Assert.Equal(2, ReadEvents(second.Path).Select(e => e.GetProperty("runId").GetString()).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task BeginRunAsync_TakesItsStartTimeFromWhenTheJournalOpened()
+    {
+        var before = DateTimeOffset.UtcNow;
+        await using var journal = await BeginAsync();
+
+        Assert.InRange(journal.StartedAtUtc, before, DateTimeOffset.UtcNow);
+        Assert.Equal(
+            journal.StartedAtUtc.ToUniversalTime(),
+            ReadEvents(journal.Path)[0].GetProperty("timestampUtc").GetDateTimeOffset());
     }
 
     [Fact]
@@ -148,13 +181,25 @@ public sealed class DeletionAuditLogTests : IDisposable
         }
     }
 
+    private Task<DeletionRunJournal> BeginAsync(int plannedVersionCount = 1) =>
+        new DeletionAuditLog(_directory).BeginRunAsync(
+            "Business1",
+            TestData.Policy(keepLatest: 10, keepDays: 30),
+            plannedVersionCount);
+
     private static string? Name(JsonElement element) => element.GetProperty("eventName").GetString();
 
-    private static IReadOnlyList<JsonElement> ReadEvents(string path) => File
-        .ReadAllLines(path)
-        .Where(line => !string.IsNullOrWhiteSpace(line))
-        .Select(line => JsonDocument.Parse(line).RootElement.Clone())
-        .ToArray();
+    private static IReadOnlyList<JsonElement> ReadEvents(string path)
+    {
+        // Opened for shared reading: the journal still has the file open for append.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd()
+            .Split('\n')
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+            .ToArray();
+    }
 
     private static VersionDeletionOutcome Outcome(string id, long? size, DeleteResultStatus status) =>
         new(
@@ -162,7 +207,7 @@ public sealed class DeletionAuditLogTests : IDisposable
             TestData.Version(id, 400, size),
             new DeleteResult { Status = status });
 
-    private static DeletionRunResult Result(params VersionDeletionOutcome[] outcomes) => new(
+    private static DeletionRunResult Result(IReadOnlyList<VersionDeletionOutcome> outcomes) => new(
         TestData.Now,
         TestData.Now.AddSeconds(5),
         outcomes,

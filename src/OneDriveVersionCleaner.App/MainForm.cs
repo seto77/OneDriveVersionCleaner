@@ -758,6 +758,15 @@ internal sealed partial class MainForm : Form
             }
         }
 
+        // Opened before anything is recycled, and a failure to open it stops the run. A version
+        // moved without a line in the log is a version nobody can account for afterwards, which
+        // is worse than not moving it at all.
+        await using var journal = await OpenDeletionJournalAsync(policy, plan.VersionCount);
+        if (journal is null)
+        {
+            return;
+        }
+
         using var cancellation = new CancellationTokenSource();
         _operationCancellation = cancellation;
         SetBusy(true, Loc(
@@ -782,7 +791,8 @@ internal sealed partial class MainForm : Form
             {
                 output = await new VersionDeletionRunner(
                         session,
-                        file => _serverPathByItemId.GetValueOrDefault(file.ItemId))
+                        file => _serverPathByItemId.GetValueOrDefault(file.ItemId),
+                        journal)
                     .RunAsync(plan, progress, cancellation.Token);
             }
             finally
@@ -790,12 +800,12 @@ internal sealed partial class MainForm : Form
                 session.ThrottleWaitStarted -= OnThrottleWait;
             }
 
-            // The record of what was recycled is written before anything else is touched.
-            // Refreshing the grid and the cache is presentation; an exception in there must not
-            // be able to take the only account of what happened with it.
-            var logPath = await WriteDeletionLogAsync(policy, output.Result);
+            // Closes the run in the log before anything else is touched. Refreshing the grid
+            // and the cache is presentation; an exception in there must not be able to leave
+            // the record looking like a run that never finished.
+            await journal.CompleteAsync(output.Result, CancellationToken.None);
             await ApplyDeletionResultAsync(output.RefreshedFiles);
-            ReportDeletionResult(output.Result, logPath);
+            ReportDeletionResult(output.Result, journal.Path);
         }
         catch (OperationCanceledException)
         {
@@ -999,27 +1009,42 @@ internal sealed partial class MainForm : Form
             planned => protectedKeys.Contains((planned.File.ItemId, planned.Version.VersionId)));
     }
 
-    private async Task<string?> WriteDeletionLogAsync(RetentionPolicy policy, DeletionRunResult result)
+    /// <summary>
+    /// Opens the journal the run will write to, or reports why it could not and returns null.
+    /// </summary>
+    /// <remarks>
+    /// The run does not start without one. Previously the log was written after the fact and a
+    /// failure to write it was only a warning, which meant versions could be recycled with no
+    /// surviving record of which ones. For a tool whose whole safety story is "you can see what
+    /// it did", that is the wrong trade.
+    /// </remarks>
+    private async Task<DeletionRunJournal?> OpenDeletionJournalAsync(
+        RetentionPolicy policy,
+        int plannedVersionCount)
     {
         try
         {
-            return await new DeletionAuditLog().WriteRunAsync(
+            return await new DeletionAuditLog().BeginRunAsync(
                 _detectedAccount?.AccountKey ?? "unknown",
                 policy,
-                result,
+                plannedVersionCount,
                 CancellationToken.None);
         }
         catch (Exception exception) when (exception is IOException or
             UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
+            _statusLabel.Text = Loc(
+                en: "Nothing was moved: the log could not be opened.",
+                ja: "記録を開けなかったため、何も移動していません。");
             MessageBox.Show(
                 this,
-                Loc(en: "The move ran, but the log could not be written.",
-                    ja: "移動は実行しましたが、ログを書き出せませんでした。") +
+                Loc(en: "The record of what was about to be moved could not be opened, so nothing " +
+                        "was moved. Nothing is recycled without a log of it.",
+                    ja: "移動の記録を開けなかったため、何も移動していません。記録なしに削除は行いません。") +
                 $"\n{exception.Message}",
                 Loc(en: "Move log", ja: "移動ログ"),
                 MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+                MessageBoxIcon.Error);
             return null;
         }
     }
