@@ -12,7 +12,7 @@
 > - 設定画面
 > - 1回の移動件数の上限
 >
-> 現在の動作は [README.md](README.md) が正です。この文書は設計判断の経緯を残すために置いています。
+> 現在の動作は [README.ja.md](README.ja.md) が正です。この文書は設計判断の経緯を残すために置いています。
 
 - 文書名: OneDrive Version History Cleaner
 - 仮称: **OneDriveVersionCleaner**

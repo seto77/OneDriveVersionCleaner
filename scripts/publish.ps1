@@ -40,7 +40,7 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXIT
 
 # THIRD-PARTY-NOTICES is not optional: the bundle carries the .NET runtime, and the WebView2
 # package's terms require its notice to travel with a redistributed binary.
-foreach ($document in 'README.md', 'LICENSE.md', 'THIRD-PARTY-NOTICES.md') {
+foreach ($document in 'README.md', 'README.ja.md', 'LICENSE.md', 'THIRD-PARTY-NOTICES.md') {
     Copy-Item -LiteralPath (Join-Path $repo $document) -Destination $stage
 }
 
