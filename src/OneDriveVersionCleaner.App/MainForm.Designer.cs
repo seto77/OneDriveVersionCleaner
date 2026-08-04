@@ -77,6 +77,10 @@ namespace OneDriveVersionCleaner.App
             _cacheAgeLabel = new Label();
             _cacheAgeInput = new NumericUpDown();
             _cacheAgeSuffix = new Label();
+            _queryLimitPanel = new FlowLayoutPanel();
+            _queryLimitLabel = new Label();
+            _queryLimitInput = new NumericUpDown();
+            _queryLimitSuffix = new Label();
             _summaryPanel = new TableLayoutPanel();
             _summaryLabel = new Label();
             _splitContainer = new SplitContainer();
@@ -133,6 +137,8 @@ namespace OneDriveVersionCleaner.App
             ((System.ComponentModel.ISupportInitialize)_minimumHistoryInput).BeginInit();
             _cacheAgePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)_cacheAgeInput).BeginInit();
+            _queryLimitPanel.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)_queryLimitInput).BeginInit();
             _summaryPanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)_splitContainer).BeginInit();
             _splitContainer.Panel1.SuspendLayout();
@@ -586,6 +592,7 @@ namespace OneDriveVersionCleaner.App
             _policyFlow.Controls.Add(_minimumFileSizePanel);
             _policyFlow.Controls.Add(_minimumHistoryPanel);
             _policyFlow.Controls.Add(_cacheAgePanel);
+            _policyFlow.Controls.Add(_queryLimitPanel);
             _policyFlow.Dock = DockStyle.Top;
             _policyFlow.Location = new Point(8, 26);
             _policyFlow.Name = "_policyFlow";
@@ -710,7 +717,7 @@ namespace OneDriveVersionCleaner.App
             _cacheAgePanel.Controls.Add(_cacheAgeInput);
             _cacheAgePanel.Controls.Add(_cacheAgeSuffix);
             _cacheAgePanel.Location = new Point(514, 0);
-            _cacheAgePanel.Margin = new Padding(0, 0, 18, 0);
+            _cacheAgePanel.Margin = new Padding(0, 0, 6, 0);
             _cacheAgePanel.Name = "_cacheAgePanel";
             _cacheAgePanel.Size = new Size(195, 31);
             _cacheAgePanel.TabIndex = 5;
@@ -751,9 +758,59 @@ namespace OneDriveVersionCleaner.App
             _cacheAgeSuffix.TabIndex = 2;
             _cacheAgeSuffix.Text = "days or more";
             _toolTip.SetToolTip(_cacheAgeSuffix, "Version history that has been read once is stored and reused.\nA file is asked about again only once this many days have passed since that read\nand the file itself has changed.\nHistory only grows when a file is edited, so an unchanged file is never asked about. 0 asks every time.");
-            // 
+            //
+            // _queryLimitPanel
+            //
+            _queryLimitPanel.AutoSize = true;
+            _queryLimitPanel.Controls.Add(_queryLimitLabel);
+            _queryLimitPanel.Controls.Add(_queryLimitInput);
+            _queryLimitPanel.Controls.Add(_queryLimitSuffix);
+            _queryLimitPanel.Location = new Point(715, 0);
+            _queryLimitPanel.Margin = new Padding(0, 0, 18, 0);
+            _queryLimitPanel.Name = "_queryLimitPanel";
+            _queryLimitPanel.Size = new Size(224, 31);
+            _queryLimitPanel.TabIndex = 6;
+            _queryLimitPanel.WrapContents = false;
+            //
+            // _queryLimitLabel
+            //
+            _queryLimitLabel.Anchor = AnchorStyles.Left;
+            _queryLimitLabel.AutoSize = true;
+            _queryLimitLabel.Location = new Point(3, 8);
+            _queryLimitLabel.Margin = new Padding(3, 7, 0, 3);
+            _queryLimitLabel.Name = "_queryLimitLabel";
+            _queryLimitLabel.Size = new Size(75, 19);
+            _queryLimitLabel.TabIndex = 0;
+            _queryLimitLabel.Text = "Query limit";
+            _toolTip.SetToolTip(_queryLimitLabel, "The most files one run asks the service about.\nThe largest files are asked about first; the rest wait for the next run, which picks them up\nbecause nothing was stored for them.\nSeveral thousand in one run runs into SharePoint's request limits: about 2,000 goes through, 10,000 does not.\n0 lifts the limit.");
+            //
+            // _queryLimitInput
+            //
+            _queryLimitInput.Increment = new decimal(new int[] { 100, 0, 0, 0 });
+            _queryLimitInput.Location = new Point(78, 3);
+            _queryLimitInput.Margin = new Padding(0, 3, 0, 3);
+            _queryLimitInput.Maximum = new decimal(new int[] { 1000000, 0, 0, 0 });
+            _queryLimitInput.Name = "_queryLimitInput";
+            _queryLimitInput.Size = new Size(66, 25);
+            _queryLimitInput.TabIndex = 1;
+            _queryLimitInput.TextAlign = HorizontalAlignment.Right;
+            _queryLimitInput.ThousandsSeparator = true;
+            _toolTip.SetToolTip(_queryLimitInput, "The most files one run asks the service about.\nThe largest files are asked about first; the rest wait for the next run, which picks them up\nbecause nothing was stored for them.\nSeveral thousand in one run runs into SharePoint's request limits: about 2,000 goes through, 10,000 does not.\n0 lifts the limit.");
+            //
+            // _queryLimitSuffix
+            //
+            _queryLimitSuffix.Anchor = AnchorStyles.Left;
+            _queryLimitSuffix.AutoSize = true;
+            _queryLimitSuffix.Location = new Point(144, 8);
+            _queryLimitSuffix.Margin = new Padding(0, 7, 3, 3);
+            _queryLimitSuffix.Name = "_queryLimitSuffix";
+            _queryLimitSuffix.Size = new Size(77, 19);
+            _queryLimitSuffix.TabIndex = 2;
+            _queryLimitSuffix.Text = "files per run";
+            _toolTip.SetToolTip(_queryLimitSuffix, "The most files one run asks the service about.\nThe largest files are asked about first; the rest wait for the next run, which picks them up\nbecause nothing was stored for them.\nSeveral thousand in one run runs into SharePoint's request limits: about 2,000 goes through, 10,000 does not.\n0 lifts the limit.");
+            //
             // _summaryPanel
-            // 
+            //
             _summaryPanel.AutoSize = true;
             _summaryPanel.ColumnCount = 1;
             _summaryPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 20F));
@@ -1183,6 +1240,9 @@ namespace OneDriveVersionCleaner.App
             _cacheAgePanel.ResumeLayout(false);
             _cacheAgePanel.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)_cacheAgeInput).EndInit();
+            _queryLimitPanel.ResumeLayout(false);
+            _queryLimitPanel.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)_queryLimitInput).EndInit();
             _summaryPanel.ResumeLayout(false);
             _summaryPanel.PerformLayout();
             _splitContainer.Panel1.ResumeLayout(false);
@@ -1253,6 +1313,10 @@ namespace OneDriveVersionCleaner.App
         private Label _cacheAgeLabel;
         private NumericUpDown _cacheAgeInput;
         private Label _cacheAgeSuffix;
+        private FlowLayoutPanel _queryLimitPanel;
+        private Label _queryLimitLabel;
+        private NumericUpDown _queryLimitInput;
+        private Label _queryLimitSuffix;
         private CheckBox _candidatesOnlyCheck;
         private TableLayoutPanel _summaryPanel;
         private Label _summaryLabel;

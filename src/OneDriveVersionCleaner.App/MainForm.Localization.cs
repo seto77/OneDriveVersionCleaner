@@ -81,6 +81,8 @@ internal sealed partial class MainForm
         _minimumHistorySuffix.Text = Loc(en: "MB or more", ja: "MB以上");
         _cacheAgeLabel.Text = Loc(en: "Re-query after", ja: "問合わせ間隔");
         _cacheAgeSuffix.Text = Loc(en: "days or more", ja: "日以上");
+        _queryLimitLabel.Text = Loc(en: "Query limit", ja: "問合わせ上限");
+        _queryLimitSuffix.Text = Loc(en: "files per run", ja: "件まで");
 
         _candidatesOnlyCheck.Text = Loc(en: "Candidates only", ja: "削除候補のみ表示");
         _filesHeaderLabel.Text = Loc(en: "History size by file", ja: "ファイル別の履歴容量");
@@ -227,6 +229,19 @@ internal sealed partial class MainForm
                     "ファイルが更新されている場合だけです。\n" +
                     "履歴は編集したときにしか増えないため、更新のないファイルは問い合わせません。0で毎回。"),
             _cacheAgeLabel, _cacheAgeInput, _cacheAgeSuffix);
+
+        SetPolicyToolTip(
+            Loc(en: "The most files one run asks the service about.\n" +
+                    "The largest files are asked about first; the rest wait for the next run, " +
+                    "which picks them up\nbecause nothing was stored for them.\n" +
+                    "Several thousand in one run runs into SharePoint's request limits: about " +
+                    "2,000 goes through, 10,000 does not.\n0 lifts the limit.",
+                ja: "1回の実行でサーバーに問い合わせるファイル数の上限です。\n" +
+                    "サイズの大きいファイルから順に問い合わせ、残りは次回以降の実行に回します。\n" +
+                    "見送ったファイルは何も保存されないため、次回の実行が改めて選び直します。\n" +
+                    "1回に数千件を問い合わせると SharePoint の要求制限にかかります。" +
+                    "2,000件程度までは通りますが、10,000件では失敗します。0で無制限。"),
+            _queryLimitLabel, _queryLimitInput, _queryLimitSuffix);
     }
 
     /// <summary>

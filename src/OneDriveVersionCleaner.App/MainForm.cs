@@ -393,6 +393,7 @@ internal sealed partial class MainForm : Form
         SetNumber(_minimumHistoryInput, _settings.MinimumHistorySizeMB);
         SetNumber(_minimumFileSizeInput, _settings.MinimumFileSizeMB);
         SetNumber(_cacheAgeInput, _settings.VersionCacheMinimumAgeDays);
+        SetNumber(_queryLimitInput, _settings.MaximumQueriedFilesPerRun);
     }
 
     /// <summary>
@@ -602,7 +603,8 @@ internal sealed partial class MainForm : Form
                         new VersionCacheOptions(
                             await _versionCache.LoadAsync(account.AccountKey, cancellation.Token),
                             TimeSpan.FromDays(decimal.ToDouble(_cacheAgeInput.Value))),
-                        count => ConfirmVersionQuery(count, thresholdBytes),
+                        decimal.ToInt32(_queryLimitInput.Value),
+                        (count, deferred) => ConfirmVersionQuery(count, deferred, thresholdBytes),
                         progress,
                         cancellation.Token);
             }
@@ -628,6 +630,13 @@ internal sealed partial class MainForm : Form
                 ? ""
                 : Loc(en: $" / {scanned.ReusedFromCacheCount:N0} reused from the last read",
                       ja: $" / 前回結果を再利用 {scanned.ReusedFromCacheCount:N0}件");
+
+            // Nothing was stored for these, so the next run selects them again. Saying so is what
+            // keeps a capped run from reading as a complete one.
+            var deferral = scanned.DeferredFileCount == 0
+                ? ""
+                : Loc(en: $" / {scanned.DeferredFileCount:N0} left for the next run",
+                      ja: $" / 次回以降に見送り {scanned.DeferredFileCount:N0}件");
             _statusLabel.Text = Loc(
                 en: $"Done: {_files.Count:N0} files / " +
                     $"{_files.Sum(file => file.PreviousVersionCount):N0} past versions / " +
@@ -638,6 +647,7 @@ internal sealed partial class MainForm : Form
                     $"ローカル検査 {survey.FilesExamined:N0}件 → 対象 {survey.Candidates.Count:N0}件 / " +
                     $"問い合わせ {scanned.QueriedFileCount:N0}件") +
                 reuse +
+                deferral +
                 Loc(en: $" ({stopwatch.Elapsed.TotalSeconds:N1} s)",
                     ja: $"（{stopwatch.Elapsed.TotalSeconds:N1}秒）");
 
@@ -922,7 +932,9 @@ internal sealed partial class MainForm : Form
     /// before. The count is now known exactly before the first one goes out, so the user sees
     /// it and agrees to it.
     /// </summary>
-    private bool ConfirmVersionQuery(int fileCount, long thresholdBytes)
+    /// <param name="fileCount">How many files this run will read, after the per-run limit.</param>
+    /// <param name="deferredCount">How many the limit held back for a later run.</param>
+    private bool ConfirmVersionQuery(int fileCount, int deferredCount, long thresholdBytes)
     {
         if (fileCount <= 200)
         {
@@ -930,21 +942,36 @@ internal sealed partial class MainForm : Form
         }
 
         var requestCount = fileCount * SharePointWebSession.RequestsPerVersionRead;
+        var opening = deferredCount == 0
+            ? Loc(en: $"{fileCount:N0} files of {SizeText.Of(thresholdBytes)} or more " +
+                      "cannot be answered from the last read.\n" +
+                      "Their version lists will be fetched one file at a time " +
+                      $"(about {requestCount:N0} requests).",
+                  ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが {fileCount:N0} 件あり、" +
+                      "前回の結果では答えられません。\n" +
+                      "これらのバージョン一覧を1ファイルずつ取得します" +
+                      $"（およそ {requestCount:N0} 回の要求）。")
+            : Loc(en: $"{fileCount + deferredCount:N0} files of {SizeText.Of(thresholdBytes)} or " +
+                      "more cannot be answered from the last read.\n" +
+                      $"The per-run limit reads the largest {fileCount:N0} of them, one file at a " +
+                      $"time (about {requestCount:N0} requests).\n" +
+                      $"The other {deferredCount:N0} are left for the next run.",
+                  ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが " +
+                      $"{fileCount + deferredCount:N0} 件あり、前回の結果では答えられません。\n" +
+                      $"1回の上限により、サイズの大きい {fileCount:N0} 件を1ファイルずつ取得します" +
+                      $"（およそ {requestCount:N0} 回の要求）。\n" +
+                      $"残る {deferredCount:N0} 件は次回以降の実行に回します。");
+
         return MessageBox.Show(
             this,
-            Loc(en: $"{fileCount:N0} files of {SizeText.Of(thresholdBytes)} or more " +
-                    "cannot be answered from the last read.\n" +
-                    "Their version lists will be fetched one file at a time " +
-                    $"(about {requestCount:N0} requests).\n\n" +
-                    "A large number of these runs into SharePoint throttling.\n" +
-                    "Cancelling and raising “File size” narrows it down.\n\n" +
+            opening + "\n\n" +
+            Loc(en: "A large number of these runs into SharePoint throttling.\n" +
+                    "Cancelling and raising “File size”, or lowering “Query limit”, narrows it " +
+                    "down.\n\n" +
                     "Continue?",
-                ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが {fileCount:N0} 件あり、" +
-                    "前回の結果では答えられません。\n" +
-                    "これらのバージョン一覧を1ファイルずつ取得します" +
-                    $"（およそ {requestCount:N0} 回の要求）。\n\n" +
-                    "件数が多いと SharePoint の要求制限にかかります。\n" +
-                    "中止して「ファイルサイズが」を大きくすると、件数を絞れます。\n\n" +
+                ja: "件数が多いと SharePoint の要求制限にかかります。\n" +
+                    "中止して「ファイルサイズが」を大きくするか、「問合わせ上限」を小さくすると、" +
+                    "件数を絞れます。\n\n" +
                     "このまま続けますか。"),
             Loc(en: "Confirm the number of requests", ja: "取得件数の確認"),
             MessageBoxButtons.YesNo,
@@ -1681,6 +1708,7 @@ internal sealed partial class MainForm : Form
         _minimumHistoryInput.Enabled = !busy;
         _minimumFileSizeInput.Enabled = !busy;
         _cacheAgeInput.Enabled = !busy;
+        _queryLimitInput.Enabled = !busy;
         _candidatesOnlyCheck.Enabled = !busy;
 
         // Changing language mid-run would rewrite the progress line under the operation that is

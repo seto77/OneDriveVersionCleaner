@@ -33,6 +33,13 @@ internal sealed class AppSettings
     /// </summary>
     public long MinimumFileSizeMB { get; set; } = 50;
 
+    /// <summary>
+    /// The most files one run may ask the service about. Zero lifts the limit. Around two
+    /// thousand files goes through; ten thousand runs into SharePoint's request limits, so the
+    /// default stays well below that and leaves the rest to the next run.
+    /// </summary>
+    public int MaximumQueriedFilesPerRun { get; set; } = 1_000;
+
     public int RetryCount { get; set; } = 5;
 
     /// <summary>

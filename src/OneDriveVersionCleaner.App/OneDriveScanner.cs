@@ -30,11 +30,16 @@ internal sealed record ScannedFile(
 /// What the scan did. The survey's own figures are not repeated here: the caller still holds
 /// the <see cref="LocalSurveyResult"/> it passed in, and one source for a number is enough.
 /// </summary>
+/// <param name="DeferredFileCount">
+/// How many files were left for a later run, either because the per-run limit was reached or
+/// because the user declined the queries.
+/// </param>
 internal sealed record ScanResult(
     IReadOnlyList<ScannedFile> Files,
     IReadOnlyList<string> Errors,
     int QueriedFileCount = 0,
-    int ReusedFromCacheCount = 0);
+    int ReusedFromCacheCount = 0,
+    int DeferredFileCount = 0);
 
 /// <summary>
 /// How much of the previous answer a scan may reuse.
@@ -49,9 +54,10 @@ internal sealed record VersionCacheOptions(
 
 /// <summary>
 /// Asked before any version request goes out, with the number of files that would be read one
-/// by one. Returning false ends the scan with what the cache already provided.
+/// by one and the number the per-run limit is holding back. Returning false ends the scan with
+/// what the cache already provided.
 /// </summary>
-internal delegate bool ConfirmVersionQuery(int fileCount);
+internal delegate bool ConfirmVersionQuery(int fileCount, int deferredCount);
 
 /// <summary>
 /// Reads version history for files the local survey already selected.
@@ -68,11 +74,17 @@ internal sealed class OneDriveScanner(
     private const int QueryBatchSize = 32;
 
     /// <summary>
-    /// Asks the service for the history of every surveyed file that the cache cannot answer for.
+    /// Asks the service for the history of every surveyed file that the cache cannot answer for,
+    /// up to <paramref name="maximumQueriedFiles"/> of them.
     /// </summary>
+    /// <param name="maximumQueriedFiles">
+    /// The most files this run may query. Zero lifts the limit. What does not fit is reported as
+    /// deferred and is picked up by the next run, which finds no stored answer for it.
+    /// </param>
     public async Task<ScanResult> ScanAsync(
         LocalSurveyResult survey,
         VersionCacheOptions cache,
+        int maximumQueriedFiles,
         ConfirmVersionQuery confirmQuery,
         IProgress<ScanProgress>? progress,
         CancellationToken cancellationToken)
@@ -108,20 +120,24 @@ internal sealed class OneDriveScanner(
             }
         }
 
-        if (toQuery.Count > 0 && !confirmQuery(toQuery.Count))
+        // The limit is applied before the question is asked, so the number the user agrees to is
+        // the number of files that will actually be read.
+        var budget = QueryBudgetPolicy.Apply(toQuery, maximumQueriedFiles);
+        if (budget.Selected.Count > 0 && !confirmQuery(budget.Selected.Count, budget.DeferredCount))
         {
             return new ScanResult(
                 reused,
                 [],
                 QueriedFileCount: 0,
-                ReusedFromCacheCount: reused.Count);
+                ReusedFromCacheCount: reused.Count,
+                DeferredFileCount: toQuery.Count);
         }
 
         var scanned = new List<ScannedFile>(survey.Candidates.Count);
         scanned.AddRange(reused);
         var errors = new List<string>();
         var completed = 0;
-        foreach (var batch in toQuery.Chunk(QueryBatchSize))
+        foreach (var batch in budget.Selected.Chunk(QueryBatchSize))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var probes = await Task.WhenAll(batch.Select(candidate =>
@@ -143,14 +159,15 @@ internal sealed class OneDriveScanner(
             }
 
             completed += batch.Length;
-            progress?.Report(new ScanProgress(completed, toQuery.Count));
+            progress?.Report(new ScanProgress(completed, budget.Selected.Count));
         }
 
         return new ScanResult(
             scanned,
             errors,
-            QueriedFileCount: toQuery.Count,
-            ReusedFromCacheCount: reused.Count);
+            QueriedFileCount: budget.Selected.Count,
+            ReusedFromCacheCount: reused.Count,
+            DeferredFileCount: budget.DeferredCount);
     }
 
     /// <summary>
