@@ -8,6 +8,10 @@
 > versions by size, and moves the ones you pick to the recycle bin, where they stay
 > restorable. English and Japanese UI.
 
+![OneDrive Version History Cleaner の画面](https://raw.githubusercontent.com/seto77/OneDriveVersionCleaner/main/docs/screenshot.png)
+
+<sub>起動直後の画面です。上段に過去バージョン、下段にファイル別の履歴容量が並びます。アカウント名とパスは差し替えてあります。</sub>
+
 ---
 
 ## 解決したい問題
@@ -68,23 +72,46 @@ Azure へのアプリ登録も Client ID も不要です。アプリ内の WebVi
 |---|---|---|
 | 1 | ローカルの同期フォルダーを歩き、現行サイズが下限以上のファイルだけを候補にする | なし |
 | 2 | 前回取得から日数が経ち、かつ更新されたものだけを残す | なし |
-| 3 | 残った件数を利用者に提示し、同意を得る（200件超のとき） | なし |
-| 4 | 候補のファイル情報とバージョン一覧を取得 | 1件2要求 |
+| 3 | サイズの大きい順に、1回の上限件数まで絞る（既定 1,000件） | なし |
+| 4 | 残った件数を利用者に提示し、同意を得る（200件超のとき） | なし |
+| 5 | 候補のファイル情報とバージョン一覧を取得 | 1件2要求 |
 
-同時に投げる要求は2本までです。要求数は段階1の時点で確定するので、走査を始める前に規模が分かります。
+同時に投げる要求は2本までです。要求数は最初の1本を送る前に確定するので、走査を始める前に規模が分かります。
+
+**1回の実行で問い合わせるファイル数には上限があります。既定は1,000件です。** 2,000件程度までは通りますが、10,000件規模を一度に問い合わせるとサーバーがエラーを返します。上限を超えた分は次回以降の実行に回ります。見送ったファイルには何も保存されないため、次の実行が改めて選び直します。**残りを取得するには、走査をもう一度実行してください。** 上限は画面の `問合わせ上限` で変更でき、0 で無制限になります。
+
+絞り込みはサイズの大きい順です。削減量が大きいファイルから先に問い合わせるので、途中で要求制限にかかっても、重要なものは取得済みになります。
 
 一度取得した履歴は保存され、次回以降は再利用します。要求制限にかかった場合は `Retry-After` に従って待機し、待機総量が上限を超えたら中断します。
 
 ## 前提
 
 - Windows
-- .NET 10 SDK
-- Microsoft Edge WebView2 ランタイム
+- Microsoft Edge WebView2 ランタイム（Windows 11 には標準で入っています）
 - OneDrive for Business（職場または学校アカウント）が同期済み
+- ソースからビルドする場合のみ、.NET 10 SDK
 
 同期ルートは Windows のレジストリから自動検出します。
 
-## 使い方
+## 入手して動かす
+
+### 配布物を使う（インストール不要）
+
+1. [Releases](https://github.com/seto77/OneDriveVersionCleaner/releases) から `OneDriveVersionCleaner-win-x64.zip` をダウンロードします
+2. 好きな場所に展開します
+3. `OneDriveVersionCleaner.exe` を実行します
+
+**インストーラーはありません。** .NET ランタイムを同梱しているので、**利用者の環境に .NET が入っていなくても動きます。** レジストリも Program Files も触りません。
+
+やめるときは展開したフォルダーごと削除してください。設定・キャッシュ・ログは `%LOCALAPPDATA%\OneDriveVersionCleaner\` に残るので、それも消す場合は併せて削除してください（[保存先](#保存先)）。
+
+**exe に Authenticode 署名はありません。** 初回起動時に SmartScreen の警告が出ます。ダウンロードした zip の SHA-256 は、同じ Releases に置いた `.sha256` ファイルと照合できます。
+
+```console
+Get-FileHash .\OneDriveVersionCleaner-win-x64.zip -Algorithm SHA256
+```
+
+### ソースからビルドする
 
 ```console
 git clone https://github.com/seto77/OneDriveVersionCleaner.git
@@ -95,12 +122,14 @@ dotnet run --project src/OneDriveVersionCleaner.App
 
 VS Code の場合はフォルダーを開いて `F5` でも起動します。
 
+### 使う
+
 1. `接続` で接続を確認します（要求1回だけ）
 2. `対象フォルダー` を指定します（既定は同期ルート）
 3. `履歴を取得` を押し、組織アカウントでサインインします
 4. 上段の表で移動したいバージョンを選び、`選択をごみ箱へ移動` を押します
 
-**最初は小さいテストフォルダーで試してください。** 段階を踏んだ手順は [RESTART_TEST_INSTRUCTIONS.md](RESTART_TEST_INSTRUCTIONS.md) にあります。
+**最初は小さいテストフォルダーで試してください。** 段階を踏んだ手順は [RESTART_TEST_INSTRUCTIONS.md](https://github.com/seto77/OneDriveVersionCleaner/blob/main/RESTART_TEST_INSTRUCTIONS.md) にあります。
 
 ## 表示言語
 
@@ -112,19 +141,30 @@ VS Code の場合はフォルダーを開いて `F5` でも起動します。
 
 日時と数値の書式は、表示言語ではなくWindowsの地域設定に従います。CSV / JSON 出力と削除ログは、表示言語にかかわらず英語の識別子で書き出します。
 
-## 配布用のビルド
+## 配布物を作る
 
 ```console
 pwsh scripts/publish.ps1
 ```
 
-テストを実行したうえで、ランタイムを同梱した単一 exe を作り、7-Zip で圧縮し、SHA-256 を書き出します。**利用者の環境に .NET が入っていなくても動きます。** 実測で 112 MB → 31 MB です。
+テストを実行したうえで、ランタイムを同梱した単一 exe を作り、zip に固めて SHA-256 を書き出します。**SDK 以外に必要なものはありません**（圧縮は .NET の `ZipFile` で行います）。
+
+実測で、展開後 49.7 MB / zip 44.3 MB です。単一 exe の中身を圧縮しているため、展開後のサイズが 112 MB から 50 MB に下がります。zip のサイズはどちらでも 44 MB 前後で変わらないので、利用者が手元に残すフォルダーが小さくなる分だけ得です。
 
 Windows には .NET ランタイムがプリインストールされていないため、self-contained 以外の形式だと利用者に別途インストールを求めることになります。
 
-書庫には README、LICENSE に加えて [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) が入ります。同梱する .NET ランタイムと WebView2 の告知はここにあります。
+zip は1つのフォルダーを含む形にしてあります。展開先にファイルが散らばりません。
 
-**exe に Authenticode 署名はありません。** 初回起動時に SmartScreen の警告が出ます。
+```text
+OneDriveVersionCleaner-win-x64/
+├─ OneDriveVersionCleaner.exe
+├─ appsettings.json
+├─ README.md
+├─ LICENSE.md
+└─ THIRD-PARTY-NOTICES.md
+```
+
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) を同梱するのは、配布物に .NET ランタイムが入っており、WebView2 の条項が再配布時の告知同梱を求めているためです。**再配布する場合も必ず同梱してください。**
 
 ## 条件
 
@@ -137,6 +177,7 @@ Windows には .NET ランタイムがプリインストールされていない
 | ファイルサイズが | 50 MB以上 | 現行サイズがこれ未満のファイルを丸ごと除外 |
 | 総履歴サイズが | 200 MB以上 | 履歴の合計がこれ未満のファイルを丸ごと除外 |
 | 問合わせ間隔 | 10日以上 | 前回取得からこの日数が経ち、かつ更新された場合だけ問い合わせ直す |
+| 問合わせ上限 | 1,000件まで | 1回の実行で問い合わせるファイル数の上限。サイズの大きい順に選び、残りは次回以降 |
 
 **除外条件** — 調べたファイルのうち、どの版を残すか。
 
@@ -178,21 +219,25 @@ Windows には .NET ランタイムがプリインストールされていない
 
 ```text
 src/
-├─ OneDriveVersionCleaner.Core/            保持判定、集計、削除計画、キャッシュ、出力、言語解決（UI非依存）
+├─ OneDriveVersionCleaner.Core/            保持判定、集計、削除計画、キャッシュ、問合わせ上限、出力（UI非依存）
 ├─ OneDriveVersionCleaner.Infrastructure/  OneDriveアカウントの自動検出（レジストリ）
-└─ OneDriveVersionCleaner.App/             WinForms UI、SharePoint RESTセッション
+└─ OneDriveVersionCleaner.App/             WinForms UI、SharePoint RESTセッション、表示言語
 tests/                                     単体テスト
 ```
 
 保持判定と削除計画は Core に閉じており、UI や通信から独立して検証できます。
 
-表示言語は `Core/Localization/` の `SupportedCultures`（対応言語の一覧）と `Localization.Loc(en:, ja:)`（呼び出し側に訳を置くヘルパー）で解決します。フォームは Visual Studio のデザイナーで編集するため、`.resx` はデザイナーの所有物です。そこへ手で書いた訳は次にデザイナーでフォームを保存した時点で消えるので、**デザイン面には英語を置き、実行時に訳を上書きします。**
+表示言語は `App/Localization/` にあります。`SupportedCultures`（対応言語の一覧と言語ごとのフォント）、`UiLanguage`（選択の保存と復元）、`Localization.Loc(en:, ja:)`（呼び出し側に訳を置くヘルパー）の3つです。訳す対象が画面の文言だけなので、UI と同じプロジェクトに置いています。
+
+フォームは Visual Studio のデザイナーで編集するため、`.resx` はデザイナーの所有物です。そこへ手で書いた訳は次にデザイナーでフォームを保存した時点で消えるので、**デザイン面には英語を置き、実行時に訳を上書きします。** 詳しくは [DESIGNER_NOTES.md](https://github.com/seto77/OneDriveVersionCleaner/blob/main/DESIGNER_NOTES.md) にあります。
 
 外部依存は `Microsoft.Web.WebView2` の1つだけです。
 
 ```console
 dotnet test
 ```
+
+開発に参加する場合は [CONTRIBUTING.md](https://github.com/seto77/OneDriveVersionCleaner/blob/main/CONTRIBUTING.md) を、脆弱性の報告は [SECURITY.md](https://github.com/seto77/OneDriveVersionCleaner/blob/main/SECURITY.md) を参照してください。
 
 ## 安全側の設計
 

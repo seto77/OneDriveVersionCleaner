@@ -31,12 +31,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # global.json が SDK を固定しているので、そこから読む。
       # バージョンをここに書き写すと2か所が食い違う。
+      # setup-dotnet の最新は v6（v7 は存在しない）。更新は Dependabot が追う。
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 

@@ -1,0 +1,30 @@
+# 依存の更新を Dependabot に追わせる。
+#
+# このアプリは自分の OneDrive に対して削除を行う。依存が古いまま放置されると、直すべきものが
+# 溜まっていることに誰も気づかないまま配布物に入る。週1回、更新があるときだけ PR が来る。
+#
+# 更新 PR も CI（build + test）を通る。通らないものは取り込まない。
+version: 2
+
+updates:
+  # ci.yml が使う actions/*。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  # 製品の依存は Microsoft.Web.WebView2 の1つだけ。残りはテスト用。
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: deps
+    groups:
+      # テスト基盤は3プロジェクトが同じ版を使う。まとめないと同じ更新で3本ずつ PR が立つ。
+      test-tooling:
+        patterns:
+          - xunit*
+          - Microsoft.NET.Test.Sdk
