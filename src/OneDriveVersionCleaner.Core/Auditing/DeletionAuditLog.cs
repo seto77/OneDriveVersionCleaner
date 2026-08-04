@@ -30,8 +30,14 @@ public sealed class DeletionAuditLog(string? directory = null)
     /// to treat a failure here as a reason not to delete anything: a run that cannot be recorded
     /// is a run nobody can audit afterwards.
     /// </summary>
+    /// <param name="appVersion">
+    /// The build doing the deleting. Recorded rather than derived here, because Core has no
+    /// business reading the version of whatever process happens to be hosting it — and a log
+    /// read months later is no use if it cannot say which build wrote it.
+    /// </param>
     public async Task<DeletionRunJournal> BeginRunAsync(
         string accountKey,
+        string appVersion,
         RetentionPolicy policy,
         int plannedVersionCount,
         CancellationToken cancellationToken = default)
@@ -40,7 +46,11 @@ public sealed class DeletionAuditLog(string? directory = null)
 
         var startedAtUtc = DateTimeOffset.UtcNow;
         Directory.CreateDirectory(_directory);
-        var journal = new DeletionRunJournal(GetLogPath(startedAtUtc), accountKey, startedAtUtc);
+        var journal = new DeletionRunJournal(
+            GetLogPath(startedAtUtc),
+            accountKey,
+            appVersion,
+            startedAtUtc);
         try
         {
             await journal.WriteStartAsync(policy, plannedVersionCount, cancellationToken)
@@ -75,13 +85,19 @@ public sealed class DeletionRunJournal : IAsyncDisposable
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly string _accountKey;
+    private readonly string _appVersion;
     private readonly FileStream _stream;
     private bool _completed;
 
-    internal DeletionRunJournal(string path, string accountKey, DateTimeOffset startedAtUtc)
+    internal DeletionRunJournal(
+        string path,
+        string accountKey,
+        string appVersion,
+        DateTimeOffset startedAtUtc)
     {
         Path = path;
         _accountKey = accountKey;
+        _appVersion = appVersion;
         StartedAtUtc = startedAtUtc;
         RunId = Guid.NewGuid().ToString("N");
 
@@ -119,6 +135,7 @@ public sealed class DeletionRunJournal : IAsyncDisposable
         new
         {
             accountKey = _accountKey,
+            appVersion = _appVersion,
             plannedVersionCount,
             policy = new
             {

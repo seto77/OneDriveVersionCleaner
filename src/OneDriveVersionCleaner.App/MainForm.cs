@@ -1053,6 +1053,7 @@ internal sealed partial class MainForm : Form
         {
             return await new DeletionAuditLog().BeginRunAsync(
                 _detectedAccount?.AccountKey ?? "unknown",
+                AppVersion.Full,
                 policy,
                 plannedVersionCount,
                 CancellationToken.None);

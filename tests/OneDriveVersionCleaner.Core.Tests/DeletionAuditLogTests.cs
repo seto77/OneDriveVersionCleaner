@@ -33,6 +33,18 @@ public sealed class DeletionAuditLogTests : IDisposable
     }
 
     [Fact]
+    public async Task WriteStartAsync_NamesTheBuildThatIsAboutToDelete()
+    {
+        await using var journal = await BeginAsync();
+
+        // A log read months later has to be able to say which build wrote it — including one
+        // somebody built from source, which is why the commit travels with the number.
+        Assert.Equal(
+            "1.2.3+abcdef",
+            ReadEvents(journal.Path)[0].GetProperty("details").GetProperty("appVersion").GetString());
+    }
+
+    [Fact]
     public async Task Journal_BracketsTheRunWithStartAndCompletionEvents()
     {
         var outcomes = new[]
@@ -134,14 +146,14 @@ public sealed class DeletionAuditLogTests : IDisposable
         var outcome = Outcome("512", 300, DeleteResultStatus.Deleted);
 
         string first;
-        await using (var journal = await log.BeginRunAsync("Business1", TestData.Policy(), 1))
+        await using (var journal = await log.BeginRunAsync("Business1", "1.2.3", TestData.Policy(), 1))
         {
             first = journal.Path;
             await journal.RecordAttemptAsync(outcome);
             await journal.CompleteAsync(Result([outcome]));
         }
 
-        await using var second = await log.BeginRunAsync("Business1", TestData.Policy(), 1);
+        await using var second = await log.BeginRunAsync("Business1", "1.2.3", TestData.Policy(), 1);
         await second.RecordAttemptAsync(outcome);
         await second.CompleteAsync(Result([outcome]));
 
@@ -184,6 +196,7 @@ public sealed class DeletionAuditLogTests : IDisposable
     private Task<DeletionRunJournal> BeginAsync(int plannedVersionCount = 1) =>
         new DeletionAuditLog(_directory).BeginRunAsync(
             "Business1",
+            "1.2.3+abcdef",
             TestData.Policy(keepLatest: 10, keepDays: 30),
             plannedVersionCount);
 

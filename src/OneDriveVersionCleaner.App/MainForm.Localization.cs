@@ -44,9 +44,11 @@ internal sealed partial class MainForm
     /// </summary>
     private void ApplyLocalizedText()
     {
+        // The version is on the title bar because it is the one place a user can read it off a
+        // build they downloaded, and a bug report that cannot name a build is guesswork.
         Text = Loc(
             en: "OneDrive Version History Cleaner",
-            ja: "OneDrive バージョン履歴クリーナー");
+            ja: "OneDrive バージョン履歴クリーナー") + $" {AppVersion.Display}";
 
         _languageMenu.Text = Loc(en: "&Language", ja: "言語(&L)");
         _englishMenuItem.Checked = SupportedCultures.Current.Name == "en";

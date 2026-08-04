@@ -32,7 +32,8 @@ cookies, tokens, passwords or MFA codes.
 
 ## 環境 / Environment
 
-- アプリの入手方法 / How you got it: <!-- ソースからビルド / リリースの exe -->
+- バージョン / Version: <!-- タイトルバーに出ます / shown in the title bar -->
+- アプリの入手方法 / How you got it: <!-- ソースからビルド / リリースの zip -->
 - Windows:
 - 表示言語 / Interface language: <!-- 日本語 / English -->
 
