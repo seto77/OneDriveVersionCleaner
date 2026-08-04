@@ -14,11 +14,14 @@ namespace OneDriveVersionCleaner.App;
 /// </remarks>
 internal static class AppVersion
 {
-    /// <summary>The version alone, for the window title.</summary>
-    public static string Display { get; } = Informational().Split('+')[0];
-
     /// <summary>The version with the commit it was built from, for the record.</summary>
     public static string Full { get; } = Informational();
+
+    /// <summary>
+    /// The version alone, for the window title. Derived from <see cref="Full"/> rather than read
+    /// again, so the two cannot answer differently.
+    /// </summary>
+    public static string Display { get; } = Full.Split('+')[0];
 
     private static string Informational()
     {

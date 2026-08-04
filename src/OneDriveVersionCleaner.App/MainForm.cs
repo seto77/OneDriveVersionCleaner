@@ -934,6 +934,7 @@ internal sealed partial class MainForm : Form
     /// </summary>
     /// <param name="fileCount">How many files this run will read, after the per-run limit.</param>
     /// <param name="deferredCount">How many the limit held back for a later run.</param>
+    /// <param name="thresholdBytes">The size threshold that produced this set of candidates.</param>
     private bool ConfirmVersionQuery(int fileCount, int deferredCount, long thresholdBytes)
     {
         if (fileCount <= 200)
@@ -942,29 +943,29 @@ internal sealed partial class MainForm : Form
         }
 
         var requestCount = fileCount * SharePointWebSession.RequestsPerVersionRead;
-        var opening = deferredCount == 0
-            ? Loc(en: $"{fileCount:N0} files of {SizeText.Of(thresholdBytes)} or more " +
-                      "cannot be answered from the last read.\n" +
-                      "Their version lists will be fetched one file at a time " +
+
+        // The first sentence is the same either way — the limit changes how many of that total
+        // this run reads, not how many there are.
+        var unanswered = Loc(
+            en: $"{fileCount + deferredCount:N0} files of {SizeText.Of(thresholdBytes)} or more " +
+                "cannot be answered from the last read.",
+            ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが {fileCount + deferredCount:N0} 件あり、" +
+                "前回の結果では答えられません。");
+        var plan = deferredCount == 0
+            ? Loc(en: "Their version lists will be fetched one file at a time " +
                       $"(about {requestCount:N0} requests).",
-                  ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが {fileCount:N0} 件あり、" +
-                      "前回の結果では答えられません。\n" +
-                      "これらのバージョン一覧を1ファイルずつ取得します" +
+                  ja: "これらのバージョン一覧を1ファイルずつ取得します" +
                       $"（およそ {requestCount:N0} 回の要求）。")
-            : Loc(en: $"{fileCount + deferredCount:N0} files of {SizeText.Of(thresholdBytes)} or " +
-                      "more cannot be answered from the last read.\n" +
-                      $"The per-run limit reads the largest {fileCount:N0} of them, one file at a " +
+            : Loc(en: $"The per-run limit reads the largest {fileCount:N0} of them, one file at a " +
                       $"time (about {requestCount:N0} requests).\n" +
                       $"The other {deferredCount:N0} are left for the next run.",
-                  ja: $"{SizeText.Of(thresholdBytes)} 以上のファイルが " +
-                      $"{fileCount + deferredCount:N0} 件あり、前回の結果では答えられません。\n" +
-                      $"1回の上限により、サイズの大きい {fileCount:N0} 件を1ファイルずつ取得します" +
+                  ja: $"1回の上限により、サイズの大きい {fileCount:N0} 件を1ファイルずつ取得します" +
                       $"（およそ {requestCount:N0} 回の要求）。\n" +
                       $"残る {deferredCount:N0} 件は次回以降の実行に回します。");
 
         return MessageBox.Show(
             this,
-            opening + "\n\n" +
+            unanswered + "\n" + plan + "\n\n" +
             Loc(en: "A large number of these runs into SharePoint throttling.\n" +
                     "Cancelling and raising “File size”, or lowering “Query limit”, narrows it " +
                     "down.\n\n" +
